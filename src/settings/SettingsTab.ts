@@ -73,8 +73,24 @@ export class McpSettingsTab extends PluginSettingTab {
 					})
 			);
 
+		new Setting(containerEl)
+			.setName("Network access")
+			.setDesc(
+				"Allow connections from other devices on your network (binds to 0.0.0.0 instead of 127.0.0.1). " +
+				"Requires restarting the server. Enable authentication when using this option."
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.networkAccess)
+					.onChange(async (value) => {
+						this.plugin.settings.networkAccess = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		const bindHost = this.plugin.settings.networkAccess ? "0.0.0.0" : "localhost";
 		const statusDesc = this.plugin.mcpServer?.isRunning()
-			? `Running on http://localhost:${this.plugin.settings.port}/mcp`
+			? `Running on http://${bindHost}:${this.plugin.settings.port}/mcp`
 			: "Stopped";
 
 		new Setting(containerEl)

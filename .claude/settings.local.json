@@ -9,7 +9,8 @@
       "Bash(curl -s http://localhost:27123/health -H \"Authorization: Bearer 7ae9daf20a4f2591dd2c46b077d23a3803ef026946c68f2fc89cd46ad38d9ab8\")",
       "Bash(curl -s http://127.0.0.1:27123/health)",
       "Bash(curl -s http://127.0.0.1:27123/health -H \"Authorization: Bearer 7ae9daf20a4f2591dd2c46b077d23a3803ef026946c68f2fc89cd46ad38d9ab8\")",
-      "Bash(curl -s -D - -X POST http://127.0.0.1:27123/mcp -H \"Authorization: Bearer 7ae9daf20a4f2591dd2c46b077d23a3803ef026946c68f2fc89cd46ad38d9ab8\" -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"\"jsonrpc\"\":\"\"2.0\"\",\"\"id\"\":1,\"\"method\"\":\"\"initialize\"\",\"\"params\"\":{\"\"protocolVersion\"\":\"\"2024-11-05\"\",\"\"capabilities\"\":{},\"\"clientInfo\"\":{\"\"name\"\":\"\"test\"\",\"\"version\"\":\"\"1.0\"\"}}}')"
+      "Bash(curl -s -D - -X POST http://127.0.0.1:27123/mcp -H \"Authorization: Bearer 7ae9daf20a4f2591dd2c46b077d23a3803ef026946c68f2fc89cd46ad38d9ab8\" -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -d '{\"\"jsonrpc\"\":\"\"2.0\"\",\"\"id\"\":1,\"\"method\"\":\"\"initialize\"\",\"\"params\"\":{\"\"protocolVersion\"\":\"\"2024-11-05\"\",\"\"capabilities\"\":{},\"\"clientInfo\"\":{\"\"name\"\":\"\"test\"\",\"\"version\"\":\"\"1.0\"\"}}}')",
+      "mcp__obsidian__get_vault_info"
     ]
   }
 }

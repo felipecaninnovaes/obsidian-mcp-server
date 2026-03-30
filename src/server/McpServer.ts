@@ -77,9 +77,11 @@ export class ObsidianMcpServer {
 			res.end(JSON.stringify({ error: "Not Found" }));
 		});
 
+		const bindHost = this.settings.networkAccess ? "0.0.0.0" : "127.0.0.1";
+
 		await new Promise<void>((resolve, reject) => {
-			this.httpServer!.listen(this.settings.port, "127.0.0.1", () => {
-				console.log(`[MCP Server] Listening on http://127.0.0.1:${this.settings.port}/mcp`);
+			this.httpServer!.listen(this.settings.port, bindHost, () => {
+				console.log(`[MCP Server] Listening on http://${bindHost}:${this.settings.port}/mcp`);
 				resolve();
 			});
 			this.httpServer!.on("error", reject);

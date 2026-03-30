@@ -3,6 +3,7 @@ export interface McpServerSettings {
 	apiKey: string;
 	enableAuth: boolean;
 	autoStart: boolean;
+	networkAccess: boolean;
 }
 
 export const DEFAULT_SETTINGS: McpServerSettings = {
@@ -10,4 +11,5 @@ export const DEFAULT_SETTINGS: McpServerSettings = {
 	apiKey: "",
 	enableAuth: true,
 	autoStart: true,
+	networkAccess: false,
 };
