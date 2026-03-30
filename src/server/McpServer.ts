@@ -5,12 +5,16 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { registerTools } from "./tools/index";
 import * as http from "http";
 
+interface Session {
+	server: McpServer;
+	transport: StreamableHTTPServerTransport;
+}
+
 export class ObsidianMcpServer {
 	private app: App;
 	private settings: McpServerSettings;
 	private httpServer: http.Server | null = null;
-	private mcpServer: McpServer | null = null;
-	private transport: StreamableHTTPServerTransport | null = null;
+	private sessions = new Map<string, Session>();
 	private running = false;
 
 	constructor(app: App, settings: McpServerSettings) {
@@ -23,19 +27,6 @@ export class ObsidianMcpServer {
 	}
 
 	async start(): Promise<void> {
-		this.mcpServer = new McpServer({
-			name: "obsidian-mcp-server",
-			version: "1.0.0",
-		});
-
-		registerTools(this.mcpServer, this.app);
-
-		this.transport = new StreamableHTTPServerTransport({
-			sessionIdGenerator: () => Math.random().toString(36).slice(2),
-		});
-
-		await this.mcpServer.connect(this.transport);
-
 		this.httpServer = http.createServer(async (req, res) => {
 			res.setHeader("Access-Control-Allow-Origin", "*");
 			res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
@@ -64,12 +55,13 @@ export class ObsidianMcpServer {
 					plugin: "obsidian-mcp-server",
 					version: "1.0.0",
 					vault: this.app.vault.getName(),
+					activeSessions: this.sessions.size,
 				}));
 				return;
 			}
 
 			if (req.url === "/mcp" || req.url?.startsWith("/mcp?")) {
-				await this.transport!.handleRequest(req, res);
+				await this.handleMcpRequest(req, res);
 				return;
 			}
 
@@ -90,6 +82,55 @@ export class ObsidianMcpServer {
 		this.running = true;
 	}
 
+	private async handleMcpRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+		const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+		// Route to existing session
+		if (sessionId && this.sessions.has(sessionId)) {
+			await this.sessions.get(sessionId)!.transport.handleRequest(req, res);
+			return;
+		}
+
+		// DELETE with unknown session — nothing to do
+		if (req.method === "DELETE") {
+			res.writeHead(404, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "Session not found" }));
+			return;
+		}
+
+		// New session: only POST (initialize) is valid
+		if (req.method !== "POST") {
+			res.writeHead(400, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "New session must start with a POST initialize request" }));
+			return;
+		}
+
+		const sid = Math.random().toString(36).slice(2);
+
+		const transport = new StreamableHTTPServerTransport({
+			sessionIdGenerator: () => sid,
+		});
+
+		const server = new McpServer({
+			name: "obsidian-mcp-server",
+			version: "1.0.0",
+		});
+
+		registerTools(server, this.app);
+		await server.connect(transport);
+
+		this.sessions.set(sid, { server, transport });
+		console.log(`[MCP Server] Session created: ${sid} (total: ${this.sessions.size})`);
+
+		transport.onclose = () => {
+			this.sessions.delete(sid);
+			server.close().catch(() => {});
+			console.log(`[MCP Server] Session closed: ${sid} (total: ${this.sessions.size})`);
+		};
+
+		await transport.handleRequest(req, res);
+	}
+
 	async stop(): Promise<void> {
 		if (this.httpServer) {
 			await new Promise<void>((resolve) => {
@@ -98,12 +139,13 @@ export class ObsidianMcpServer {
 			this.httpServer = null;
 		}
 
-		if (this.mcpServer) {
-			await this.mcpServer.close();
-			this.mcpServer = null;
+		for (const { server, transport } of this.sessions.values()) {
+			transport.onclose = undefined;
+			await server.close().catch(() => {});
+			await transport.close().catch(() => {});
 		}
+		this.sessions.clear();
 
-		this.transport = null;
 		this.running = false;
 	}
 }
