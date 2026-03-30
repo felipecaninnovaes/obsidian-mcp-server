@@ -40,6 +40,8 @@ export function registerTools(server: McpServer, app: App): void {
 	registerGetActiveNote(server, app);
 	registerGetVaultInfo(server, app);
 	registerCreateFolder(server, app);
+	registerGetBacklinks(server, app);
+	registerRenameNote(server, app);
 }
 
 function registerListFiles(server: McpServer, app: App): void {
@@ -237,6 +239,113 @@ function registerCreateFolder(server: McpServer, app: App): void {
 			if (app.vault.getAbstractFileByPath(safePath)) throw new Error("Pasta ou arquivo já existe nesse caminho");
 			await app.vault.createFolder(safePath);
 			return { content: [{ type: "text", text: `Pasta criada: ${safePath}` }] };
+		}
+	);
+}
+
+function registerGetBacklinks(server: McpServer, app: App): void {
+	server.registerTool(
+		"get_backlinks",
+		{
+			description: "Lista todas as notas que contêm links apontando para uma nota específica.",
+			inputSchema: {
+				path: z.string().max(MAX_PATH_LENGTH).describe("Caminho da nota alvo (ex: Termos/Glossário.md)"),
+			},
+		},
+		async ({ path }) => {
+			const safePath = sanitizePath(path);
+			const target = app.vault.getAbstractFileByPath(safePath);
+			if (!(target instanceof TFile)) throw new Error("Arquivo não encontrado");
+
+			// Build the set of link patterns to look for:
+			// 1. Full path without extension: "Termos/Glossário"
+			// 2. Basename without extension: "Glossário"
+			const withoutExt = safePath.replace(/\.md$/i, "");
+			const basename = withoutExt.split("/").pop() as string;
+			const patterns = Array.from(new Set([withoutExt, basename]));
+
+			const backlinks: string[] = [];
+			for (const file of app.vault.getMarkdownFiles()) {
+				if (file.path === safePath) continue;
+				const content = await app.vault.cachedRead(file);
+				const hasLink = patterns.some((p) => {
+					// Match [[pattern]] or [[pattern|alias]]
+					const escaped = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+					return new RegExp(`\\[\\[${escaped}(?:\\|[^\\]]*)?\\]\\]`, "i").test(content);
+				});
+				if (hasLink) backlinks.push(file.path);
+			}
+
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({ target: safePath, total: backlinks.length, backlinks: backlinks.sort() }, null, 2),
+					},
+				],
+			};
+		}
+	);
+}
+
+function registerRenameNote(server: McpServer, app: App): void {
+	server.registerTool(
+		"rename_note",
+		{
+			description: "Renomeia uma nota e atualiza todos os links [[...]] que apontam para ela no vault.",
+			inputSchema: {
+				path: z.string().max(MAX_PATH_LENGTH).describe("Caminho atual da nota (ex: Termos/Antigo.md)"),
+				new_path: z.string().max(MAX_PATH_LENGTH).describe("Novo caminho da nota (ex: Termos/Novo.md)"),
+			},
+		},
+		async ({ path, new_path }) => {
+			const safePath = sanitizePath(path);
+			const safeNewPath = sanitizePath(new_path);
+
+			const file = app.vault.getAbstractFileByPath(safePath);
+			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
+			if (app.vault.getAbstractFileByPath(safeNewPath)) throw new Error("Já existe um arquivo no novo caminho");
+
+			const oldWithoutExt = safePath.replace(/\.md$/i, "");
+			const oldBasename = oldWithoutExt.split("/").pop() as string;
+			const newWithoutExt = safeNewPath.replace(/\.md$/i, "");
+			const newBasename = newWithoutExt.split("/").pop() as string;
+
+			// Update links in all notes before renaming
+			let updatedFiles = 0;
+			for (const note of app.vault.getMarkdownFiles()) {
+				if (note.path === safePath) continue;
+				const original = await app.vault.read(note);
+
+				// Replace [[oldPath|alias]], [[oldPath]], [[oldBasename|alias]], [[oldBasename]]
+				let updated = original;
+				for (const [oldRef, newRef] of [
+					[oldWithoutExt, newWithoutExt],
+					[oldBasename, newBasename],
+				]) {
+					const escaped = oldRef.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+					updated = updated.replace(
+						new RegExp(`\\[\\[${escaped}(\\|[^\\]]*)?\\]\\]`, "gi"),
+						(_, alias) => `[[${newRef}${alias ?? ""}]]`
+					);
+				}
+
+				if (updated !== original) {
+					await app.vault.modify(note, updated);
+					updatedFiles++;
+				}
+			}
+
+			await app.vault.rename(file, safeNewPath);
+
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({ renamed: { from: safePath, to: safeNewPath }, links_updated_in: updatedFiles }, null, 2),
+					},
+				],
+			};
 		}
 	);
 }
