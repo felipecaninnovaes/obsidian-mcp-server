@@ -61,6 +61,14 @@ export class ObsidianMcpServer {
 				return;
 			}
 
+			// Health check is intentionally public — returns no sensitive data
+			// and allows clients/monitors to check availability before authenticating.
+			if (req.url === "/health" || req.url === "/") {
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ status: "ok", version: "1.0.0" }));
+				return;
+			}
+
 			if (this.settings.enableAuth) {
 				const authHeader = req.headers["authorization"];
 				if (authHeader !== `Bearer ${this.settings.apiKey}`) {
@@ -68,12 +76,6 @@ export class ObsidianMcpServer {
 					res.end(JSON.stringify({ error: "Unauthorized" }));
 					return;
 				}
-			}
-
-			if (req.url === "/health" || req.url === "/") {
-				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ status: "ok", version: "1.0.0" }));
-				return;
 			}
 
 			if (req.url === "/mcp" || req.url?.startsWith("/mcp?")) {
