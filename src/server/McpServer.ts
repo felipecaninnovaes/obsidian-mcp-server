@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerTools } from "./tools/index";
 import * as http from "http";
+import { randomBytes } from "crypto";
 
 interface Session {
 	server: McpServer;
@@ -27,8 +28,29 @@ export class ObsidianMcpServer {
 	}
 
 	async start(): Promise<void> {
+		// Runtime validation: reject invalid port numbers
+		if (
+			!Number.isInteger(this.settings.port) ||
+			this.settings.port < 1 ||
+			this.settings.port > 65535
+		) {
+			throw new Error(`Invalid port number: ${this.settings.port}. Must be between 1 and 65535.`);
+		}
+
+		// Enforce authentication when binding to all interfaces
+		if (this.settings.networkAccess && !this.settings.enableAuth) {
+			throw new Error(
+				"Authentication must be enabled when network access is on. " +
+				"Enable 'Require authentication' in settings before starting the server."
+			);
+		}
+
 		this.httpServer = http.createServer(async (req, res) => {
-			res.setHeader("Access-Control-Allow-Origin", "*");
+			// Restrict CORS to localhost origins only
+			const origin = req.headers["origin"];
+			if (origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+				res.setHeader("Access-Control-Allow-Origin", origin);
+			}
 			res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
 			res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id");
 			res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
@@ -50,13 +72,7 @@ export class ObsidianMcpServer {
 
 			if (req.url === "/health" || req.url === "/") {
 				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({
-					status: "ok",
-					plugin: "obsidian-mcp-server",
-					version: "1.0.0",
-					vault: this.app.vault.getName(),
-					activeSessions: this.sessions.size,
-				}));
+				res.end(JSON.stringify({ status: "ok", version: "1.0.0" }));
 				return;
 			}
 
@@ -105,7 +121,8 @@ export class ObsidianMcpServer {
 			return;
 		}
 
-		const sid = Math.random().toString(36).slice(2);
+		// Cryptographically secure session ID
+		const sid = randomBytes(32).toString("hex");
 
 		const transport = new StreamableHTTPServerTransport({
 			sessionIdGenerator: () => sid,
@@ -120,12 +137,12 @@ export class ObsidianMcpServer {
 		await server.connect(transport);
 
 		this.sessions.set(sid, { server, transport });
-		console.log(`[MCP Server] Session created: ${sid} (total: ${this.sessions.size})`);
+		console.log(`[MCP Server] Session created (total: ${this.sessions.size})`);
 
 		transport.onclose = () => {
 			this.sessions.delete(sid);
 			server.close().catch(() => {});
-			console.log(`[MCP Server] Session closed: ${sid} (total: ${this.sessions.size})`);
+			console.log(`[MCP Server] Session closed (total: ${this.sessions.size})`);
 		};
 
 		await transport.handleRequest(req, res);

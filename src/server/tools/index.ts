@@ -2,6 +2,34 @@ import { App, TFile, TFolder } from "obsidian";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+const MAX_PATH_LENGTH = 512;
+const MAX_CONTENT_LENGTH = 10_000_000; // 10 MB
+const MAX_QUERY_LENGTH = 1_000;
+
+/**
+ * Validates and normalizes a vault-relative path.
+ * Rejects absolute paths, path traversal sequences, and paths that are too long.
+ */
+function sanitizePath(path: string): string {
+	if (path.length > MAX_PATH_LENGTH) {
+		throw new Error("Path too long (max 512 characters)");
+	}
+	// Reject absolute paths and any traversal attempts
+	if (path.startsWith("/") || /(?:^|\/)\.\.(?:\/|$)/.test(path)) {
+		throw new Error("Invalid path: absolute paths and directory traversal are not allowed");
+	}
+	// Normalize separators and collapse redundant segments
+	const normalized = path
+		.replace(/\\/g, "/")
+		.split("/")
+		.filter((segment) => segment.length > 0 && segment !== ".")
+		.join("/");
+	if (normalized.length === 0) {
+		throw new Error("Invalid path: empty after normalization");
+	}
+	return normalized;
+}
+
 export function registerTools(server: McpServer, app: App): void {
 	registerListFiles(server, app);
 	registerReadNote(server, app);
@@ -19,16 +47,17 @@ function registerListFiles(server: McpServer, app: App): void {
 		{
 			description: "Lista arquivos e pastas do vault Obsidian.",
 			inputSchema: {
-				path: z.string().optional().describe("Pasta do vault para listar. Raiz se omitido."),
+				path: z.string().max(MAX_PATH_LENGTH).optional().describe("Pasta do vault para listar. Raiz se omitido."),
 				recursive: z.boolean().optional().default(false),
 			},
 		},
 		async ({ path: targetPath = "", recursive }) => {
+			const safePath = targetPath === "" ? "" : sanitizePath(targetPath);
 			const allFiles = app.vault.getAllLoadedFiles();
 			const results: string[] = [];
 
 			for (const f of allFiles) {
-				const isInPath = targetPath === "" || f.path.startsWith(targetPath);
+				const isInPath = safePath === "" || f.path.startsWith(safePath);
 				if (!isInPath) continue;
 				if (!recursive && f instanceof TFolder) {
 					results.push(f.path + "/");
@@ -50,12 +79,13 @@ function registerReadNote(server: McpServer, app: App): void {
 		{
 			description: "Lê o conteúdo de uma nota pelo caminho.",
 			inputSchema: {
-				path: z.string().describe("Caminho da nota (ex: Pasta/Nota.md)"),
+				path: z.string().max(MAX_PATH_LENGTH).describe("Caminho da nota (ex: Pasta/Nota.md)"),
 			},
 		},
 		async ({ path }) => {
-			const file = app.vault.getAbstractFileByPath(path);
-			if (!(file instanceof TFile)) throw new Error(`Arquivo não encontrado: ${path}`);
+			const safePath = sanitizePath(path);
+			const file = app.vault.getAbstractFileByPath(safePath);
+			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
 			const content = await app.vault.read(file);
 			return { content: [{ type: "text", text: content }] };
 		}
@@ -68,14 +98,15 @@ function registerCreateNote(server: McpServer, app: App): void {
 		{
 			description: "Cria uma nova nota no vault.",
 			inputSchema: {
-				path: z.string(),
-				content: z.string(),
+				path: z.string().max(MAX_PATH_LENGTH),
+				content: z.string().max(MAX_CONTENT_LENGTH),
 			},
 		},
 		async ({ path, content }) => {
-			if (app.vault.getAbstractFileByPath(path)) throw new Error(`Já existe: ${path}`);
-			await app.vault.create(path, content);
-			return { content: [{ type: "text", text: `Nota criada: ${path}` }] };
+			const safePath = sanitizePath(path);
+			if (app.vault.getAbstractFileByPath(safePath)) throw new Error("Arquivo já existe");
+			await app.vault.create(safePath, content);
+			return { content: [{ type: "text", text: `Nota criada: ${safePath}` }] };
 		}
 	);
 }
@@ -86,14 +117,15 @@ function registerUpdateNote(server: McpServer, app: App): void {
 		{
 			description: "Atualiza o conteúdo de uma nota existente.",
 			inputSchema: {
-				path: z.string(),
-				content: z.string(),
+				path: z.string().max(MAX_PATH_LENGTH),
+				content: z.string().max(MAX_CONTENT_LENGTH),
 				mode: z.enum(["overwrite", "append", "prepend"]).default("overwrite"),
 			},
 		},
 		async ({ path, content, mode }) => {
-			const file = app.vault.getAbstractFileByPath(path);
-			if (!(file instanceof TFile)) throw new Error(`Arquivo não encontrado: ${path}`);
+			const safePath = sanitizePath(path);
+			const file = app.vault.getAbstractFileByPath(safePath);
+			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
 			if (mode === "overwrite") {
 				await app.vault.modify(file, content);
 			} else if (mode === "append") {
@@ -101,7 +133,7 @@ function registerUpdateNote(server: McpServer, app: App): void {
 			} else {
 				await app.vault.modify(file, content + "\n" + (await app.vault.read(file)));
 			}
-			return { content: [{ type: "text", text: `Nota atualizada (${mode}): ${path}` }] };
+			return { content: [{ type: "text", text: `Nota atualizada (${mode})` }] };
 		}
 	);
 }
@@ -112,14 +144,15 @@ function registerDeleteNote(server: McpServer, app: App): void {
 		{
 			description: "Deleta um arquivo do vault.",
 			inputSchema: {
-				path: z.string(),
+				path: z.string().max(MAX_PATH_LENGTH),
 			},
 		},
 		async ({ path }) => {
-			const file = app.vault.getAbstractFileByPath(path);
-			if (!(file instanceof TFile)) throw new Error(`Arquivo não encontrado: ${path}`);
+			const safePath = sanitizePath(path);
+			const file = app.vault.getAbstractFileByPath(safePath);
+			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
 			await app.vault.delete(file);
-			return { content: [{ type: "text", text: `Arquivo deletado: ${path}` }] };
+			return { content: [{ type: "text", text: "Arquivo deletado" }] };
 		}
 	);
 }
@@ -130,7 +163,7 @@ function registerSearchVault(server: McpServer, app: App): void {
 		{
 			description: "Busca por texto em todas as notas do vault.",
 			inputSchema: {
-				query: z.string(),
+				query: z.string().min(1).max(MAX_QUERY_LENGTH),
 				case_sensitive: z.boolean().optional().default(false),
 			},
 		},
@@ -142,13 +175,33 @@ function registerSearchVault(server: McpServer, app: App): void {
 				const searchFor = case_sensitive ? query : query.toLowerCase();
 				if (!searchIn.includes(searchFor)) continue;
 				const idx = searchIn.indexOf(searchFor);
-				const excerpt = "..." + content.slice(Math.max(0, idx - 100), idx + query.length + 100).replace(/\n/g, " ") + "...";
-				const matchCount = (searchIn.match(new RegExp(searchFor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length;
+				const excerpt =
+					"..." +
+					content
+						.slice(Math.max(0, idx - 100), idx + query.length + 100)
+						.replace(/\n/g, " ") +
+					"...";
+				// Count matches with indexOf loop to avoid ReDoS
+				let matchCount = 0;
+				let pos = 0;
+				while ((pos = searchIn.indexOf(searchFor, pos)) !== -1) {
+					matchCount++;
+					pos += searchFor.length;
+				}
 				results.push({ path: file.path, matches: matchCount, excerpt });
 			}
 			results.sort((a, b) => b.matches - a.matches);
 			return {
-				content: [{ type: "text", text: JSON.stringify({ query, total_files_matched: results.length, results: results.slice(0, 20) }, null, 2) }],
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify(
+							{ query, total_files_matched: results.length, results: results.slice(0, 20) },
+							null,
+							2
+						),
+					},
+				],
 			};
 		}
 	);
@@ -178,16 +231,20 @@ function registerGetVaultInfo(server: McpServer, app: App): void {
 		async () => {
 			const allFiles = app.vault.getAllLoadedFiles();
 			return {
-				content: [{
-					type: "text",
-					text: JSON.stringify({
-						name: app.vault.getName(),
-						total_files: allFiles.length,
-						markdown_files: app.vault.getMarkdownFiles().length,
-						folders: allFiles.filter((f) => f instanceof TFolder).length,
-						adapter: (app.vault.adapter as { basePath?: string }).basePath ?? "unknown",
-					}, null, 2),
-				}],
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify(
+							{
+								total_files: allFiles.length,
+								markdown_files: app.vault.getMarkdownFiles().length,
+								folders: allFiles.filter((f) => f instanceof TFolder).length,
+							},
+							null,
+							2
+						),
+					},
+				],
 			};
 		}
 	);
