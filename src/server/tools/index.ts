@@ -322,7 +322,7 @@ function registerRenameNote(server: McpServer, app: App): void {
 				for (const [oldRef, newRef] of [
 					[oldWithoutExt, newWithoutExt],
 					[oldBasename, newBasename],
-				]) {
+				] as [string, string][]) {
 					const escaped = oldRef.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 					updated = updated.replace(
 						new RegExp(`\\[\\[${escaped}(\\|[^\\]]*)?\\]\\]`, "gi"),
