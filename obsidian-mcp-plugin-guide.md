@@ -1,7 +1,22 @@
 # Obsidian MCP Server Plugin — Guia Completo de Desenvolvimento
 
-> Plugin nativo que embute um MCP Server HTTP diretamente no Obsidian.  
+> Plugin nativo que embute um MCP Server HTTP diretamente no Obsidian.
 > O usuário instala → configura a URL no IDE → conecta. Sem dependências externas.
+
+---
+
+## Estado atual do projeto
+
+| Arquivo / Módulo | Status |
+|---|---|
+| `manifest.json` | ✅ Configurado |
+| `package.json` | ✅ Configurado |
+| `src/types.ts` | ✅ Implementado |
+| `src/main.ts` | ✅ Implementado |
+| `src/settings/SettingsTab.ts` | ✅ Implementado |
+| `src/server/McpServer.ts` | 🚧 Stub — HTTP + MCP SDK pendente |
+| `src/server/tools/index.ts` | 🚧 Stub — tools pendentes |
+| Tools individuais (8 arquivos) | 🔲 Não criados |
 
 ---
 
@@ -85,37 +100,19 @@ O **Streamable HTTP** é a solução correta: o plugin abre um servidor HTTP loc
 
 ## 2. Pré-requisitos e Setup do Ambiente
 
-### Ferramentas necessárias
-
-```bash
-# Node.js (v18+) e npm
-node --version   # >= 18
-npm --version
-
-# Git
-git --version
-```
-
-### Clonar o template oficial
-
-```bash
-git clone https://github.com/obsidianmd/obsidian-sample-plugin.git obsidian-mcp-server
-cd obsidian-mcp-server
-npm install
-```
-
 ### Instalar dependências do projeto
+
+As dependências já estão instaladas. Para referência:
 
 ```bash
 # SDK oficial do MCP (Anthropic)
 npm install @modelcontextprotocol/sdk
 
-# Tipagens do Obsidian (já vem no template, mas confirme)
-npm install --save-dev obsidian
-
 # Zod para validação de schemas das tools
 npm install zod
 ```
+
+> **Nota:** O projeto usa `builtinModules` de `node:module` (built-in do Node.js/Electron), sem o pacote npm `builtin-modules`.
 
 ### Linkar o plugin no vault de desenvolvimento
 
@@ -133,37 +130,53 @@ Depois abra o Obsidian com esse vault, vá em **Settings → Community plugins �
 
 ## 3. Estrutura de Arquivos do Projeto
 
+### Estado atual
+
 ```
 obsidian-mcp-server/
 ├── src/
-│   ├── main.ts              # Entry point do plugin
+│   ├── main.ts                  ✅ Plugin entry point
+│   ├── types.ts                 ✅ Tipos e settings
 │   ├── server/
-│   │   ├── McpServer.ts     # HTTP Server + MCP transport
+│   │   ├── McpServer.ts         🚧 Stub — implementação pendente
 │   │   └── tools/
-│   │       ├── index.ts     # Registra todas as tools
-│   │       ├── listFiles.ts
-│   │       ├── readNote.ts
-│   │       ├── createNote.ts
-│   │       ├── updateNote.ts
-│   │       ├── deleteNote.ts
-│   │       ├── searchVault.ts
-│   │       ├── getActiveNote.ts
-│   │       └── getVaultInfo.ts
-│   ├── settings/
-│   │   └── SettingsTab.ts   # UI de configurações
-│   └── types.ts             # Tipos compartilhados
-├── manifest.json
-├── package.json
-├── tsconfig.json
-├── esbuild.config.mjs
-└── .gitignore
+│   │       └── index.ts         🚧 Stub — registrar tools aqui
+│   └── settings/
+│       └── SettingsTab.ts       ✅ UI de configurações
+├── manifest.json                ✅
+├── package.json                 ✅
+├── tsconfig.json                (template original — ver seção 4)
+├── esbuild.config.mjs           (template original — ver seção 4)
+└── styles.css
+```
+
+### Estrutura alvo (completa)
+
+```
+src/
+├── main.ts
+├── types.ts
+├── server/
+│   ├── McpServer.ts
+│   └── tools/
+│       ├── index.ts             # Registra e despacha todas as tools
+│       ├── listFiles.ts         🔲
+│       ├── readNote.ts          🔲
+│       ├── createNote.ts        🔲
+│       ├── updateNote.ts        🔲
+│       ├── deleteNote.ts        🔲
+│       ├── searchVault.ts       🔲
+│       ├── getActiveNote.ts     🔲
+│       └── getVaultInfo.ts      🔲
+└── settings/
+    └── SettingsTab.ts
 ```
 
 ---
 
 ## 4. Configuração dos Arquivos Base
 
-### `manifest.json`
+### `manifest.json` ✅
 
 ```json
 {
@@ -172,15 +185,15 @@ obsidian-mcp-server/
   "version": "1.0.0",
   "minAppVersion": "1.4.0",
   "description": "Embeds an MCP Server inside Obsidian. Connect any MCP-compatible IDE or AI client to your vault.",
-  "author": "Seu Nome",
-  "authorUrl": "https://github.com/seu-usuario",
+  "author": "Felipe CN",
+  "authorUrl": "https://github.com/felipecn",
   "isDesktopOnly": true
 }
 ```
 
 > **`isDesktopOnly: true` é obrigatório** — o plugin usa APIs do Node.js (`http`, `net`) que não existem no Obsidian Mobile.
 
-### `package.json`
+### `package.json` ✅
 
 ```json
 {
@@ -188,64 +201,77 @@ obsidian-mcp-server/
   "version": "1.0.0",
   "description": "MCP Server plugin for Obsidian",
   "main": "main.js",
+  "type": "module",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "version": "node version-bump.mjs && git add manifest.json versions.json"
+    "version": "node version-bump.mjs && git add manifest.json versions.json",
+    "lint": "eslint ."
   },
   "keywords": ["obsidian", "mcp", "ai"],
-  "license": "MIT",
+  "license": "0-BSD",
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "builtin-modules": "^3.3.0",
-    "esbuild": "^0.20.0",
-    "obsidian": "latest",
-    "tslib": "^2.6.0",
-    "typescript": "^5.0.0"
+    "@eslint/js": "9.30.1",
+    "@types/node": "^16.11.6",
+    "esbuild": "0.25.5",
+    "eslint-plugin-obsidianmd": "0.1.9",
+    "globals": "14.0.0",
+    "jiti": "2.6.1",
+    "tslib": "2.4.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "8.35.1"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "zod": "^3.22.0"
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "obsidian": "latest",
+    "zod": "^4.3.6"
   }
 }
 ```
 
-### `tsconfig.json`
+### `tsconfig.json` (template original)
+
+O arquivo atual usa as configurações do template `obsidian-sample-plugin`:
 
 ```json
 {
   "compilerOptions": {
-    "baseUrl": ".",
+    "baseUrl": "src",
     "inlineSourceMap": true,
     "inlineSources": true,
     "module": "ESNext",
-    "target": "ES2022",
-    "allowImportingTsExtensions": true,
-    "moduleResolution": "bundler",
+    "target": "ES6",
+    "allowJs": true,
+    "noImplicitAny": true,
+    "noImplicitThis": true,
+    "noImplicitReturns": true,
+    "moduleResolution": "node",
     "importHelpers": true,
+    "noUncheckedIndexedAccess": true,
     "isolatedModules": true,
     "strictNullChecks": true,
-    "lib": ["DOM", "ES2022"],
-    "paths": {
-      "obsidian": ["node_modules/obsidian/obsidian.d.ts"]
-    }
+    "strictBindCallApply": true,
+    "allowSyntheticDefaultImports": true,
+    "useUnknownInCatchVariables": true,
+    "lib": ["DOM", "ES5", "ES6", "ES7"]
   },
   "include": ["src/**/*.ts"]
 }
 ```
 
-### `esbuild.config.mjs`
+> **Nota:** `baseUrl: "src"` significa que imports dentro de `src/` são relativos a essa pasta. Imports de `../types` de dentro de `src/server/` continuam funcionando normalmente.
+
+### `esbuild.config.mjs` (template original)
 
 ```javascript
 import esbuild from "esbuild";
 import process from "process";
-import builtins from "builtin-modules";
+import { builtinModules } from "node:module";
 
 const banner = `/*
 THIS IS A GENERATED/BUNDLED FILE BY ESBUILD
-if you want to view the source, please visit the github repository
-*/
-`;
+if you want to view the source, please visit the github repository of this plugin
+*/`;
 
 const prod = process.argv[2] === "production";
 
@@ -267,10 +293,10 @@ const context = await esbuild.context({
     "@lezer/common",
     "@lezer/highlight",
     "@lezer/lr",
-    ...builtins,  // IMPORTANTE: inclui 'http', 'net', 'stream', etc.
+    ...builtinModules,  // inclui 'http', 'net', 'stream', 'crypto', etc.
   ],
   format: "cjs",
-  target: "es2022",
+  target: "es2018",
   logLevel: "info",
   sourcemap: prod ? false : "inline",
   treeShaking: true,
@@ -286,9 +312,9 @@ if (prod) {
 }
 ```
 
-> **Atenção:** `...builtins` no array `external` é crítico. Isso diz ao esbuild para não tentar empacotar módulos nativos do Node.js como `http`, `net`, `stream` — eles serão resolvidos pelo Electron em runtime.
+> **`...builtinModules`** no array `external` é crítico. Diz ao esbuild para não tentar empacotar módulos nativos do Node.js — eles são resolvidos pelo Electron em runtime. O projeto usa `builtinModules` de `node:module` (nativo), sem o pacote npm `builtin-modules`.
 
-### `src/types.ts`
+### `src/types.ts` ✅
 
 ```typescript
 export interface McpServerSettings {
@@ -310,14 +336,14 @@ export const DEFAULT_SETTINGS: McpServerSettings = {
 
 ## 5. Implementação: Entry Point do Plugin
 
-### `src/main.ts`
+### `src/main.ts` ✅
 
 ```typescript
 import { Plugin, Notice } from "obsidian";
-import { McpServerSettings, DEFAULT_SETTINGS } from "./types";
+import { randomBytes } from "crypto";
+import { DEFAULT_SETTINGS, McpServerSettings } from "./types";
 import { ObsidianMcpServer } from "./server/McpServer";
 import { McpSettingsTab } from "./settings/SettingsTab";
-import { randomBytes } from "crypto";
 
 export default class McpServerPlugin extends Plugin {
   settings: McpServerSettings;
@@ -326,29 +352,21 @@ export default class McpServerPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
 
-    // Gera uma API key se não existir
     if (!this.settings.apiKey) {
       this.settings.apiKey = randomBytes(32).toString("hex");
       await this.saveSettings();
     }
 
-    // Adiciona aba de configurações
     this.addSettingTab(new McpSettingsTab(this.app, this));
 
-    // Botão na ribbon (barra lateral)
-    const ribbonIcon = this.addRibbonIcon(
-      "plug",
-      "MCP Server",
-      async () => {
-        if (this.mcpServer?.isRunning()) {
-          await this.stopServer();
-        } else {
-          await this.startServer();
-        }
+    this.addRibbonIcon("plug", "MCP Server", async () => {
+      if (this.mcpServer?.isRunning()) {
+        await this.stopServer();
+      } else {
+        await this.startServer();
       }
-    );
+    });
 
-    // Comandos via Command Palette
     this.addCommand({
       id: "start-mcp-server",
       name: "Start MCP Server",
@@ -371,10 +389,8 @@ export default class McpServerPlugin extends Plugin {
       },
     });
 
-    // Auto-start se configurado
     if (this.settings.autoStart) {
-      // Pequeno delay para garantir que o Obsidian carregou completamente
-      setTimeout(() => this.startServer(), 1000);
+      await this.startServer();
     }
   }
 
@@ -383,35 +399,24 @@ export default class McpServerPlugin extends Plugin {
   }
 
   async startServer() {
-    if (this.mcpServer?.isRunning()) {
-      new Notice("MCP Server já está rodando.");
-      return;
-    }
-
-    try {
-      this.mcpServer = new ObsidianMcpServer(this.app, this.settings);
-      await this.mcpServer.start();
-      new Notice(`✅ MCP Server iniciado na porta ${this.settings.port}`);
-    } catch (err) {
-      console.error("[MCP Server] Falha ao iniciar:", err);
-      new Notice(`❌ Erro ao iniciar MCP Server: ${err.message}`);
-    }
+    if (this.mcpServer?.isRunning()) return;
+    this.mcpServer = new ObsidianMcpServer(this.app, this.settings);
+    await this.mcpServer.start();
+    new Notice(`MCP Server started on port ${this.settings.port}`);
   }
 
   async stopServer() {
     if (!this.mcpServer?.isRunning()) return;
-
-    try {
-      await this.mcpServer.stop();
-      this.mcpServer = null;
-      new Notice("MCP Server parado.");
-    } catch (err) {
-      console.error("[MCP Server] Erro ao parar:", err);
-    }
+    await this.mcpServer.stop();
+    new Notice("MCP Server stopped");
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.settings = Object.assign(
+      {},
+      DEFAULT_SETTINGS,
+      (await this.loadData()) as Partial<McpServerSettings>
+    );
   }
 
   async saveSettings() {
@@ -424,12 +429,50 @@ export default class McpServerPlugin extends Plugin {
 
 ## 6. Implementação: MCP Server HTTP
 
-### `src/server/McpServer.ts`
+### `src/server/McpServer.ts` 🚧
+
+Estado atual — stub com interface pública definida:
 
 ```typescript
 import { App } from "obsidian";
 import { McpServerSettings } from "../types";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+
+export class ObsidianMcpServer {
+  private app: App;
+  private settings: McpServerSettings;
+  private running = false;
+
+  constructor(app: App, settings: McpServerSettings) {
+    this.app = app;
+    this.settings = settings;
+  }
+
+  isRunning(): boolean {
+    return this.running;
+  }
+
+  async start(): Promise<void> {
+    // TODO: iniciar HTTP server com Streamable HTTP transport do MCP SDK
+    // - criar McpServer do @modelcontextprotocol/sdk
+    // - registrar tools via registerTools(mcpServer, this.app)
+    // - criar http.createServer que roteia POST /mcp e GET /mcp
+    // - aplicar autenticação via apiKey se settings.enableAuth
+    this.running = true;
+  }
+
+  async stop(): Promise<void> {
+    // TODO: encerrar o http.Server e o McpServer transport
+    this.running = false;
+  }
+}
+```
+
+### Implementação completa (referência)
+
+```typescript
+import { App } from "obsidian";
+import { McpServerSettings } from "../types";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerTools } from "./tools/index";
 import * as http from "http";
@@ -438,7 +481,7 @@ export class ObsidianMcpServer {
   private app: App;
   private settings: McpServerSettings;
   private httpServer: http.Server | null = null;
-  private mcpServer: Server | null = null;
+  private mcpServer: McpServer | null = null;
   private transport: StreamableHTTPServerTransport | null = null;
   private running = false;
 
@@ -452,38 +495,23 @@ export class ObsidianMcpServer {
   }
 
   async start(): Promise<void> {
-    // Cria o MCP Server
-    this.mcpServer = new Server(
-      {
-        name: "obsidian-mcp-server",
-        version: "1.0.0",
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      }
-    );
+    this.mcpServer = new McpServer({
+      name: "obsidian-mcp-server",
+      version: "1.0.0",
+    });
 
-    // Registra todas as tools do vault
     registerTools(this.mcpServer, this.app);
 
-    // Cria o transport Streamable HTTP
     this.transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => Math.random().toString(36).slice(2),
     });
 
     await this.mcpServer.connect(this.transport);
 
-    // Cria o HTTP Server nativo do Node.js
     this.httpServer = http.createServer(async (req, res) => {
-      // CORS headers para permitir conexão de IDEs locais
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-      res.setHeader(
-        "Access-Control-Allow-Headers",
-        "Content-Type, Authorization, Mcp-Session-Id"
-      );
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id");
       res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
 
       if (req.method === "OPTIONS") {
@@ -492,32 +520,26 @@ export class ObsidianMcpServer {
         return;
       }
 
-      // Verificação de autenticação
       if (this.settings.enableAuth) {
         const authHeader = req.headers["authorization"];
-        const expectedToken = `Bearer ${this.settings.apiKey}`;
-        if (authHeader !== expectedToken) {
+        if (authHeader !== `Bearer ${this.settings.apiKey}`) {
           res.writeHead(401, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Unauthorized" }));
           return;
         }
       }
 
-      // Rota de health check
       if (req.url === "/health" || req.url === "/") {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            status: "ok",
-            plugin: "obsidian-mcp-server",
-            version: "1.0.0",
-            vault: this.app.vault.getName(),
-          })
-        );
+        res.end(JSON.stringify({
+          status: "ok",
+          plugin: "obsidian-mcp-server",
+          version: "1.0.0",
+          vault: this.app.vault.getName(),
+        }));
         return;
       }
 
-      // Rota principal do MCP
       if (req.url === "/mcp" || req.url?.startsWith("/mcp?")) {
         await this.transport!.handleRequest(req, res);
         return;
@@ -527,7 +549,6 @@ export class ObsidianMcpServer {
       res.end(JSON.stringify({ error: "Not Found" }));
     });
 
-    // Inicia o servidor na porta configurada
     await new Promise<void>((resolve, reject) => {
       this.httpServer!.listen(this.settings.port, "127.0.0.1", () => {
         console.log(`[MCP Server] Listening on http://127.0.0.1:${this.settings.port}/mcp`);
@@ -554,30 +575,49 @@ export class ObsidianMcpServer {
 
     this.transport = null;
     this.running = false;
-    console.log("[MCP Server] Stopped.");
   }
 }
 ```
+
+> **Imports do SDK v1.28+:** A classe é `McpServer` (de `server/mcp.js`), não `Server` (de `server/index.js`). Confirme os exports da versão instalada antes de importar.
 
 ---
 
 ## 7. Implementação: Vault Tools
 
-### `src/server/tools/index.ts`
+### `src/server/tools/index.ts` 🚧
+
+Estado atual — stub com interface pública e TODOs:
 
 ```typescript
 import { App } from "obsidian";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { registerListFiles } from "./listFiles";
-import { registerReadNote } from "./readNote";
-import { registerCreateNote } from "./createNote";
-import { registerUpdateNote } from "./updateNote";
-import { registerDeleteNote } from "./deleteNote";
-import { registerSearchVault } from "./searchVault";
-import { registerGetActiveNote } from "./getActiveNote";
-import { registerGetVaultInfo } from "./getVaultInfo";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-export function registerTools(server: Server, app: App): void {
+export function registerTools(server: McpServer, app: App): void {
+  // TODO: implementar e registrar cada tool
+  // listFiles(server, app)
+  // readNote(server, app)
+  // createNote(server, app)
+  // updateNote(server, app)
+  // deleteNote(server, app)
+  // searchVault(server, app)
+  // getActiveNote(server, app)
+  // getVaultInfo(server, app)
+  void app;
+  void server;
+}
+```
+
+### Implementação completa (referência)
+
+O SDK v1+ expõe `server.tool()` para registrar tools diretamente:
+
+```typescript
+import { App, TFile, TFolder } from "obsidian";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+export function registerTools(server: McpServer, app: App): void {
   registerListFiles(server, app);
   registerReadNote(server, app);
   registerCreateNote(server, app);
@@ -589,394 +629,159 @@ export function registerTools(server: Server, app: App): void {
 }
 ```
 
-### `src/server/tools/listFiles.ts`
+### Padrão de cada tool (SDK v1+ com `server.tool()`)
 
 ```typescript
-import { App, TFile, TFolder } from "obsidian";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
+// Exemplo: listFiles.ts
+export function registerListFiles(server: McpServer, app: App): void {
+  server.tool(
+    "list_files",
+    "Lista arquivos e pastas do vault Obsidian.",
+    {
+      path: z.string().optional().describe("Pasta do vault para listar. Raiz se omitido."),
+      recursive: z.boolean().optional().default(false),
+    },
+    async ({ path: targetPath = "", recursive }) => {
+      const allFiles = app.vault.getAllLoadedFiles();
+      const results: string[] = [];
 
-const ListFilesSchema = z.object({
-  path: z.string().optional().describe("Pasta do vault para listar. Raiz se omitido."),
-  recursive: z.boolean().optional().default(false).describe("Listar subpastas recursivamente"),
-});
-
-export function registerListFiles(server: Server, app: App): void {
-  server.setRequestHandler(ListToolsRequestSchema, async (req, extra) => {
-    // Este handler é compartilhado — cada tool adiciona ao array
-    // Na prática, use o padrão de tool registration do SDK
-    return { tools: [] }; // Placeholder — veja nota abaixo
-  });
-
-  // Registra a tool diretamente no handler de CallTool
-  const originalHandler = server.getRequestHandler?.(CallToolRequestSchema);
-
-  server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    if (req.params.name !== "list_files") {
-      return originalHandler ? originalHandler(req, {}) : { content: [] };
-    }
-
-    const args = ListFilesSchema.parse(req.params.arguments ?? {});
-    const targetPath = args.path ?? "/";
-    const folder = app.vault.getAbstractFileByPath(targetPath === "/" ? "" : targetPath);
-
-    const files: string[] = [];
-
-    const collect = (f: TFolder | null) => {
-      if (!f) return;
-      for (const child of f.children) {
-        if (child instanceof TFile) {
-          files.push(child.path);
-        } else if (child instanceof TFolder && args.recursive) {
-          collect(child);
-        } else if (child instanceof TFolder) {
-          files.push(child.path + "/");
+      for (const f of allFiles) {
+        const isInPath = targetPath === "" || f.path.startsWith(targetPath);
+        if (!isInPath) continue;
+        if (!recursive && f instanceof TFolder) {
+          results.push(f.path + "/");
+        } else if (f instanceof TFile) {
+          results.push(f.path);
         }
       }
-    };
 
-    if (folder instanceof TFolder) {
-      collect(folder);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ files: results.sort() }, null, 2) }],
+      };
+    }
+  );
+}
+```
+
+### Handlers das demais tools (referência)
+
+```typescript
+// read_note
+server.tool("read_note", "Lê o conteúdo de uma nota pelo caminho.",
+  { path: z.string().describe("Caminho da nota (ex: Pasta/Nota.md)") },
+  async ({ path }) => {
+    const file = app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) throw new Error(`Arquivo não encontrado: ${path}`);
+    const content = await app.vault.read(file);
+    return { content: [{ type: "text", text: content }] };
+  }
+);
+
+// create_note
+server.tool("create_note", "Cria uma nova nota no vault.",
+  { path: z.string(), content: z.string() },
+  async ({ path, content }) => {
+    if (app.vault.getAbstractFileByPath(path)) throw new Error(`Já existe: ${path}`);
+    await app.vault.create(path, content);
+    return { content: [{ type: "text", text: `Nota criada: ${path}` }] };
+  }
+);
+
+// update_note
+server.tool("update_note", "Atualiza o conteúdo de uma nota existente.",
+  {
+    path: z.string(),
+    content: z.string(),
+    mode: z.enum(["overwrite", "append", "prepend"]).default("overwrite"),
+  },
+  async ({ path, content, mode }) => {
+    const file = app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) throw new Error(`Arquivo não encontrado: ${path}`);
+    if (mode === "overwrite") {
+      await app.vault.modify(file, content);
+    } else if (mode === "append") {
+      await app.vault.modify(file, (await app.vault.read(file)) + "\n" + content);
     } else {
-      // Raiz do vault
-      app.vault.getAllLoadedFiles().forEach((f) => {
-        if (f instanceof TFile && !args.recursive) files.push(f.path);
-        else if (f instanceof TFile) files.push(f.path);
-      });
+      await app.vault.modify(file, content + "\n" + (await app.vault.read(file)));
     }
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ path: targetPath, files }, null, 2),
-        },
-      ],
-    };
-  });
-}
-```
-
-> **Nota sobre registro de tools:** O SDK do MCP tem uma API de alto nível para registrar tools. O padrão recomendado é usar `server.tool()` se disponível na versão instalada, ou gerenciar manualmente os handlers `ListTools` e `CallTool`. Verifique a versão do SDK instalada com `npm show @modelcontextprotocol/sdk version`.
-
-### Padrão recomendado para todas as tools (SDK v1+)
-
-A partir do SDK v1, o padrão correto é:
-
-```typescript
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-
-// Em um arquivo central (tools/index.ts), configure os dois handlers uma vez:
-
-export function registerTools(server: Server, app: App): void {
-  // Lista de todas as tools
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [
-      {
-        name: "list_files",
-        description: "Lista arquivos e pastas do vault Obsidian.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            path: { type: "string", description: "Caminho da pasta. Raiz se omitido." },
-            recursive: { type: "boolean", description: "Listar recursivamente." },
-          },
-        },
-      },
-      {
-        name: "read_note",
-        description: "Lê o conteúdo de uma nota pelo caminho.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            path: { type: "string", description: "Caminho da nota (ex: Pasta/Nota.md)" },
-          },
-          required: ["path"],
-        },
-      },
-      {
-        name: "create_note",
-        description: "Cria uma nova nota no vault.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            path: { type: "string", description: "Caminho completo com extensão (ex: Pasta/Nota.md)" },
-            content: { type: "string", description: "Conteúdo em markdown." },
-          },
-          required: ["path", "content"],
-        },
-      },
-      {
-        name: "update_note",
-        description: "Atualiza o conteúdo de uma nota existente.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            path: { type: "string", description: "Caminho da nota." },
-            content: { type: "string", description: "Novo conteúdo." },
-            mode: {
-              type: "string",
-              enum: ["overwrite", "append", "prepend"],
-              description: "Modo de escrita. Default: overwrite.",
-            },
-          },
-          required: ["path", "content"],
-        },
-      },
-      {
-        name: "delete_note",
-        description: "Deleta um arquivo do vault.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            path: { type: "string", description: "Caminho do arquivo a deletar." },
-          },
-          required: ["path"],
-        },
-      },
-      {
-        name: "search_vault",
-        description: "Busca por texto em todas as notas do vault.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            query: { type: "string", description: "Texto a buscar." },
-            case_sensitive: { type: "boolean", description: "Busca case-sensitive. Default: false." },
-          },
-          required: ["query"],
-        },
-      },
-      {
-        name: "get_active_note",
-        description: "Retorna a nota atualmente aberta no editor do Obsidian.",
-        inputSchema: { type: "object", properties: {} },
-      },
-      {
-        name: "get_vault_info",
-        description: "Retorna metadados do vault (nome, total de arquivos, etc).",
-        inputSchema: { type: "object", properties: {} },
-      },
-    ],
-  }));
-
-  // Dispatcher central de chamadas
-  server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const { name, arguments: args } = req.params;
-
-    switch (name) {
-      case "list_files":       return await handleListFiles(app, args);
-      case "read_note":        return await handleReadNote(app, args);
-      case "create_note":      return await handleCreateNote(app, args);
-      case "update_note":      return await handleUpdateNote(app, args);
-      case "delete_note":      return await handleDeleteNote(app, args);
-      case "search_vault":     return await handleSearchVault(app, args);
-      case "get_active_note":  return await handleGetActiveNote(app);
-      case "get_vault_info":   return await handleGetVaultInfo(app);
-      default:
-        throw new Error(`Tool desconhecida: ${name}`);
-    }
-  });
-}
-```
-
-### Implementação das handlers individuais
-
-```typescript
-import { App, TFile, TFolder } from "obsidian";
-
-// ─── list_files ───────────────────────────────────────────────────────────────
-async function handleListFiles(app: App, args: any) {
-  const targetPath: string = args?.path ?? "";
-  const recursive: boolean = args?.recursive ?? false;
-
-  const allFiles = app.vault.getAllLoadedFiles();
-  const results: string[] = [];
-
-  for (const f of allFiles) {
-    const isInPath = targetPath === "" || f.path.startsWith(targetPath);
-    if (!isInPath) continue;
-    if (!recursive && f instanceof TFolder) {
-      results.push(f.path + "/");
-    } else if (f instanceof TFile) {
-      results.push(f.path);
-    }
+    return { content: [{ type: "text", text: `Nota atualizada (${mode}): ${path}` }] };
   }
+);
 
-  return {
-    content: [{ type: "text", text: JSON.stringify({ files: results.sort() }, null, 2) }],
-  };
-}
-
-// ─── read_note ────────────────────────────────────────────────────────────────
-async function handleReadNote(app: App, args: any) {
-  const path: string = args?.path;
-  if (!path) throw new Error("Parâmetro 'path' é obrigatório.");
-
-  const file = app.vault.getAbstractFileByPath(path);
-  if (!(file instanceof TFile)) throw new Error(`Arquivo não encontrado: ${path}`);
-
-  const content = await app.vault.read(file);
-  return {
-    content: [{ type: "text", text: content }],
-  };
-}
-
-// ─── create_note ──────────────────────────────────────────────────────────────
-async function handleCreateNote(app: App, args: any) {
-  const path: string = args?.path;
-  const content: string = args?.content ?? "";
-  if (!path) throw new Error("Parâmetro 'path' é obrigatório.");
-
-  const existing = app.vault.getAbstractFileByPath(path);
-  if (existing) throw new Error(`Arquivo já existe: ${path}`);
-
-  await app.vault.create(path, content);
-  return {
-    content: [{ type: "text", text: `Nota criada: ${path}` }],
-  };
-}
-
-// ─── update_note ──────────────────────────────────────────────────────────────
-async function handleUpdateNote(app: App, args: any) {
-  const path: string = args?.path;
-  const content: string = args?.content ?? "";
-  const mode: string = args?.mode ?? "overwrite";
-  if (!path) throw new Error("Parâmetro 'path' é obrigatório.");
-
-  const file = app.vault.getAbstractFileByPath(path);
-  if (!(file instanceof TFile)) throw new Error(`Arquivo não encontrado: ${path}`);
-
-  if (mode === "overwrite") {
-    await app.vault.modify(file, content);
-  } else if (mode === "append") {
-    const existing = await app.vault.read(file);
-    await app.vault.modify(file, existing + "\n" + content);
-  } else if (mode === "prepend") {
-    const existing = await app.vault.read(file);
-    await app.vault.modify(file, content + "\n" + existing);
+// delete_note
+server.tool("delete_note", "Deleta um arquivo do vault.",
+  { path: z.string() },
+  async ({ path }) => {
+    const file = app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) throw new Error(`Arquivo não encontrado: ${path}`);
+    await app.vault.delete(file);
+    return { content: [{ type: "text", text: `Arquivo deletado: ${path}` }] };
   }
+);
 
-  return {
-    content: [{ type: "text", text: `Nota atualizada (${mode}): ${path}` }],
-  };
-}
-
-// ─── delete_note ──────────────────────────────────────────────────────────────
-async function handleDeleteNote(app: App, args: any) {
-  const path: string = args?.path;
-  if (!path) throw new Error("Parâmetro 'path' é obrigatório.");
-
-  const file = app.vault.getAbstractFileByPath(path);
-  if (!(file instanceof TFile)) throw new Error(`Arquivo não encontrado: ${path}`);
-
-  await app.vault.delete(file);
-  return {
-    content: [{ type: "text", text: `Arquivo deletado: ${path}` }],
-  };
-}
-
-// ─── search_vault ─────────────────────────────────────────────────────────────
-async function handleSearchVault(app: App, args: any) {
-  const query: string = args?.query;
-  const caseSensitive: boolean = args?.case_sensitive ?? false;
-  if (!query) throw new Error("Parâmetro 'query' é obrigatório.");
-
-  const results: { path: string; matches: number; excerpt: string }[] = [];
-  const allFiles = app.vault.getMarkdownFiles();
-
-  for (const file of allFiles) {
-    const content = await app.vault.cachedRead(file);
-    const searchIn = caseSensitive ? content : content.toLowerCase();
-    const searchFor = caseSensitive ? query : query.toLowerCase();
-
-    if (searchIn.includes(searchFor)) {
+// search_vault
+server.tool("search_vault", "Busca por texto em todas as notas do vault.",
+  { query: z.string(), case_sensitive: z.boolean().optional().default(false) },
+  async ({ query, case_sensitive }) => {
+    const results: { path: string; matches: number; excerpt: string }[] = [];
+    for (const file of app.vault.getMarkdownFiles()) {
+      const content = await app.vault.cachedRead(file);
+      const searchIn = case_sensitive ? content : content.toLowerCase();
+      const searchFor = case_sensitive ? query : query.toLowerCase();
+      if (!searchIn.includes(searchFor)) continue;
       const idx = searchIn.indexOf(searchFor);
-      const start = Math.max(0, idx - 100);
-      const end = Math.min(content.length, idx + query.length + 100);
-      const excerpt = "..." + content.slice(start, end).replace(/\n/g, " ") + "...";
+      const excerpt = "..." + content.slice(Math.max(0, idx - 100), idx + query.length + 100).replace(/\n/g, " ") + "...";
       const matchCount = (searchIn.match(new RegExp(searchFor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length;
-
       results.push({ path: file.path, matches: matchCount, excerpt });
     }
-  }
-
-  results.sort((a, b) => b.matches - a.matches);
-
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(
-          { query, total_files_matched: results.length, results: results.slice(0, 20) },
-          null, 2
-        ),
-      },
-    ],
-  };
-}
-
-// ─── get_active_note ──────────────────────────────────────────────────────────
-async function handleGetActiveNote(app: App) {
-  const activeFile = app.workspace.getActiveFile();
-
-  if (!activeFile) {
+    results.sort((a, b) => b.matches - a.matches);
     return {
-      content: [{ type: "text", text: "Nenhuma nota ativa no momento." }],
+      content: [{ type: "text", text: JSON.stringify({ query, total_files_matched: results.length, results: results.slice(0, 20) }, null, 2) }],
     };
   }
+);
 
-  const content = await app.vault.read(activeFile);
-  return {
-    content: [
-      {
+// get_active_note
+server.tool("get_active_note", "Retorna a nota atualmente aberta no editor do Obsidian.",
+  {},
+  async () => {
+    const activeFile = app.workspace.getActiveFile();
+    if (!activeFile) return { content: [{ type: "text", text: "Nenhuma nota ativa no momento." }] };
+    const content = await app.vault.read(activeFile);
+    return { content: [{ type: "text", text: JSON.stringify({ path: activeFile.path, content }, null, 2) }] };
+  }
+);
+
+// get_vault_info
+server.tool("get_vault_info", "Retorna metadados do vault.",
+  {},
+  async () => {
+    const allFiles = app.vault.getAllLoadedFiles();
+    return {
+      content: [{
         type: "text",
-        text: JSON.stringify({ path: activeFile.path, content }, null, 2),
-      },
-    ],
-  };
-}
-
-// ─── get_vault_info ───────────────────────────────────────────────────────────
-async function handleGetVaultInfo(app: App) {
-  const allFiles = app.vault.getAllLoadedFiles();
-  const markdownFiles = app.vault.getMarkdownFiles();
-  const folders = allFiles.filter((f) => f instanceof TFolder);
-
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(
-          {
-            name: app.vault.getName(),
-            total_files: allFiles.length,
-            markdown_files: markdownFiles.length,
-            folders: folders.length,
-            adapter: (app.vault.adapter as any).basePath ?? "unknown",
-          },
-          null, 2
-        ),
-      },
-    ],
-  };
-}
+        text: JSON.stringify({
+          name: app.vault.getName(),
+          total_files: allFiles.length,
+          markdown_files: app.vault.getMarkdownFiles().length,
+          folders: allFiles.filter((f) => f instanceof TFolder).length,
+          adapter: (app.vault.adapter as { basePath?: string }).basePath ?? "unknown",
+        }, null, 2),
+      }],
+    };
+  }
+);
 ```
 
 ---
 
 ## 8. Implementação: Settings UI
 
-### `src/settings/SettingsTab.ts`
+### `src/settings/SettingsTab.ts` ✅
 
 ```typescript
-import { App, PluginSettingTab, Setting, Notice } from "obsidian";
-import McpServerPlugin from "../main";
-import { randomBytes } from "crypto";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import type McpServerPlugin from "../main";
 
 export class McpSettingsTab extends PluginSettingTab {
   plugin: McpServerPlugin;
@@ -989,144 +794,83 @@ export class McpSettingsTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-
     containerEl.createEl("h2", { text: "MCP Server Settings" });
 
-    // Status atual
-    const statusEl = containerEl.createEl("p");
-    const updateStatus = () => {
-      const running = this.plugin.mcpServer?.isRunning() ?? false;
-      statusEl.setText(`Status: ${running ? "🟢 Rodando" : "🔴 Parado"}`);
-    };
-    updateStatus();
-
-    // Porta
     new Setting(containerEl)
-      .setName("Porta")
-      .setDesc("Porta do servidor HTTP local. Padrão: 27123")
+      .setName("Port")
+      .setDesc("Port the MCP HTTP server listens on (default: 27123).")
       .addText((text) =>
         text
           .setPlaceholder("27123")
           .setValue(String(this.plugin.settings.port))
           .onChange(async (value) => {
-            const port = parseInt(value);
-            if (!isNaN(port) && port > 1024 && port < 65535) {
+            const port = parseInt(value, 10);
+            if (!isNaN(port) && port > 0 && port < 65536) {
               this.plugin.settings.port = port;
               await this.plugin.saveSettings();
             }
           })
       );
 
-    // Autenticação
-    new Setting(containerEl)
-      .setName("Autenticação por API Key")
-      .setDesc("Exige o header Authorization: Bearer <api_key> em todas as requisições.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.enableAuth).onChange(async (value) => {
-          this.plugin.settings.enableAuth = value;
-          await this.plugin.saveSettings();
-        })
-      );
-
-    // API Key
     new Setting(containerEl)
       .setName("API Key")
-      .setDesc("Chave de autenticação. Copie para usar no seu IDE.")
-      .addText((text) => {
+      .setDesc("Secret key required by MCP clients to authenticate.")
+      .addText((text) =>
         text
+          .setPlaceholder("auto-generated")
           .setValue(this.plugin.settings.apiKey)
-          .setDisabled(true);
-        text.inputEl.style.width = "300px";
-        text.inputEl.style.fontFamily = "monospace";
-      })
-      .addButton((btn) => {
-        btn.setButtonText("Copiar").onClick(() => {
+          .onChange(async (value) => {
+            this.plugin.settings.apiKey = value;
+            await this.plugin.saveSettings();
+          })
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Copy").onClick(() => {
           navigator.clipboard.writeText(this.plugin.settings.apiKey);
-          new Notice("API Key copiada!");
-        });
-      })
-      .addButton((btn) => {
-        btn.setButtonText("Gerar nova").setWarning().onClick(async () => {
-          this.plugin.settings.apiKey = randomBytes(32).toString("hex");
-          await this.plugin.saveSettings();
-          this.display(); // Re-render
-          new Notice("Nova API Key gerada. Atualize a configuração no seu IDE.");
-        });
-      });
-
-    // Auto-start
-    new Setting(containerEl)
-      .setName("Iniciar automaticamente")
-      .setDesc("Inicia o servidor ao abrir o Obsidian.")
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.autoStart).onChange(async (value) => {
-          this.plugin.settings.autoStart = value;
-          await this.plugin.saveSettings();
+          new Notice("API key copied!");
         })
       );
 
-    // URL do servidor
-    const mcpUrl = `http://localhost:${this.plugin.settings.port}/mcp`;
     new Setting(containerEl)
-      .setName("URL do MCP Server")
-      .setDesc("Use essa URL na configuração do seu IDE.")
-      .addText((text) => {
-        text.setValue(mcpUrl).setDisabled(true);
-        text.inputEl.style.width = "300px";
-        text.inputEl.style.fontFamily = "monospace";
-      })
-      .addButton((btn) => {
-        btn.setButtonText("Copiar URL").onClick(() => {
-          navigator.clipboard.writeText(mcpUrl);
-          new Notice("URL copiada!");
-        });
-      });
-
-    // Configuração pronta para colar no IDE
-    containerEl.createEl("h3", { text: "Configuração para IDEs" });
-
-    const config = {
-      mcpServers: {
-        obsidian: {
-          transport: {
-            type: "http",
-            url: mcpUrl,
-            headers: this.plugin.settings.enableAuth
-              ? { Authorization: `Bearer ${this.plugin.settings.apiKey}` }
-              : undefined,
-          },
-        },
-      },
-    };
-
-    const configText = containerEl.createEl("pre", {
-      text: JSON.stringify(config, null, 2),
-    });
-    configText.style.cssText =
-      "background: var(--background-secondary); padding: 12px; border-radius: 6px; font-size: 12px; overflow-x: auto;";
-
-    new Setting(containerEl).addButton((btn) => {
-      btn.setButtonText("Copiar configuração JSON").onClick(() => {
-        navigator.clipboard.writeText(JSON.stringify(config, null, 2));
-        new Notice("Configuração copiada!");
-      });
-    });
-
-    // Botões de controle
-    containerEl.createEl("h3", { text: "Controles" });
+      .setName("Require authentication")
+      .setDesc("Reject requests that do not include the API key.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.enableAuth)
+          .onChange(async (value) => {
+            this.plugin.settings.enableAuth = value;
+            await this.plugin.saveSettings();
+          })
+      );
 
     new Setting(containerEl)
-      .setName("Servidor")
+      .setName("Auto-start on load")
+      .setDesc("Start the MCP server automatically when Obsidian opens.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.autoStart)
+          .onChange(async (value) => {
+            this.plugin.settings.autoStart = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    const statusDesc = this.plugin.mcpServer?.isRunning()
+      ? `Running on http://localhost:${this.plugin.settings.port}/mcp`
+      : "Stopped";
+
+    new Setting(containerEl)
+      .setName("Server status")
+      .setDesc(statusDesc)
       .addButton((btn) => {
-        btn.setButtonText("Iniciar").setCta().onClick(async () => {
-          await this.plugin.startServer();
-          updateStatus();
-        });
-      })
-      .addButton((btn) => {
-        btn.setButtonText("Parar").setWarning().onClick(async () => {
-          await this.plugin.stopServer();
-          updateStatus();
+        const running = this.plugin.mcpServer?.isRunning() ?? false;
+        btn.setButtonText(running ? "Stop" : "Start").onClick(async () => {
+          if (running) {
+            await this.plugin.stopServer();
+          } else {
+            await this.plugin.startServer();
+          }
+          this.display();
         });
       });
   }
@@ -1143,7 +887,7 @@ export class McpSettingsTab extends PluginSettingTab {
 npm run dev
 ```
 
-O esbuild vai observar mudanças e recompilar automaticamente para `main.js`. No Obsidian, use **Ctrl+R** (ou via plugin *Hot Reload*) para recarregar.
+O esbuild observa mudanças e recompila automaticamente para `main.js`. No Obsidian, use **Ctrl+R** (ou o plugin *Hot Reload*) para recarregar.
 
 ### Build para produção
 
@@ -1155,7 +899,7 @@ Gera `main.js` minificado, pronto para distribuição.
 
 ### Teste manual do servidor
 
-Com o plugin ativo e o servidor rodando, você pode testar via curl:
+Com o plugin ativo e o servidor rodando:
 
 ```bash
 # Health check
@@ -1179,7 +923,7 @@ curl -X POST http://localhost:27123/mcp \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_files","arguments":{}}}'
 ```
 
-### Usar o MCP Inspector (ferramenta oficial)
+### MCP Inspector (ferramenta oficial)
 
 ```bash
 npx @modelcontextprotocol/inspector http://localhost:27123/mcp
@@ -1193,7 +937,7 @@ Abre uma interface web para explorar e testar todas as tools interativamente.
 
 ### Claude Desktop (`claude_desktop_config.json`)
 
-**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`  
+**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
@@ -1260,14 +1004,9 @@ claude mcp add --transport http obsidian http://localhost:27123/mcp \
 1. **Crie um release no GitHub:**
 
 ```bash
-# Crie os arquivos de release
 git tag 1.0.0
 git push origin 1.0.0
-
-# No GitHub, crie um Release com:
-# - main.js (build de produção)
-# - manifest.json
-# - styles.css (se houver)
+# No GitHub, crie um Release com: main.js, manifest.json, styles.css
 ```
 
 2. **Fork do repositório de plugins:**
@@ -1282,9 +1021,9 @@ git clone https://github.com/obsidianmd/obsidian-releases
 {
   "id": "obsidian-mcp-server",
   "name": "MCP Server",
-  "author": "Seu Nome",
+  "author": "Felipe CN",
   "description": "Embeds an MCP Server inside Obsidian for AI IDE integration.",
-  "repo": "seu-usuario/obsidian-mcp-server"
+  "repo": "felipecn/obsidian-mcp-server"
 }
 ```
 
@@ -1302,21 +1041,18 @@ git clone https://github.com/obsidianmd/obsidian-releases
 - [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
 - [obsidian-sample-plugin (template)](https://github.com/obsidianmd/obsidian-sample-plugin)
 
-### Projetos de referência para estudar
+### Projetos de referência
 
-- [obsidian-mcp-plugin](https://github.com/aaronsb/obsidian-mcp-plugin) — Plugin que embute HTTP MCP server nativamente (mais próximo do que queremos)
+- [obsidian-mcp-plugin](https://github.com/aaronsb/obsidian-mcp-plugin) — Plugin que embute HTTP MCP server nativamente
 - [obsidian-local-rest-api](https://github.com/coddingtonbear/obsidian-local-rest-api) — Referência de como abrir um servidor HTTP dentro de um plugin Obsidian
 
-### Pacotes npm relevantes
+### Pacotes npm instalados
 
-| Pacote | Versão | Uso |
+| Pacote | Versão instalada | Uso |
 |---|---|---|
-| `@modelcontextprotocol/sdk` | `^1.0.0` | SDK oficial MCP |
+| `@modelcontextprotocol/sdk` | `^1.28.0` | SDK oficial MCP |
 | `obsidian` | `latest` | Tipagens da API do Obsidian |
-| `zod` | `^3.22.0` | Validação de schemas |
-| `esbuild` | `^0.20.0` | Bundler |
-| `typescript` | `^5.0.0` | Compilador |
-
----
-
-> **Dica final:** Antes de iniciar do zero, clone e rode o `obsidian-mcp-plugin` localmente para ver o comportamento esperado. O código-fonte dele é a melhor documentação viva de como esse tipo de integração funciona na prática.
+| `zod` | `^4.3.6` | Validação de schemas das tools |
+| `esbuild` | `0.25.5` | Bundler |
+| `typescript` | `^5.8.3` | Compilador |
+| `@types/node` | `^16.11.6` | Tipagens Node.js |
