@@ -2,20 +2,27 @@ import { App } from "obsidian";
 import { McpServerSettings } from "../types";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { registerTools } from "./tools/index";
 import * as http from "http";
 import { randomBytes } from "crypto";
 
-interface Session {
+interface StreamableSession {
 	server: McpServer;
 	transport: StreamableHTTPServerTransport;
+}
+
+interface SseSession {
+	server: McpServer;
+	transport: SSEServerTransport;
 }
 
 export class ObsidianMcpServer {
 	private app: App;
 	private settings: McpServerSettings;
 	private httpServer: http.Server | null = null;
-	private sessions = new Map<string, Session>();
+	private sessions = new Map<string, StreamableSession>();
+	private sseSessions = new Map<string, SseSession>();
 	private running = false;
 
 	constructor(app: App, settings: McpServerSettings) {
@@ -80,6 +87,17 @@ export class ObsidianMcpServer {
 
 			if (req.url === "/mcp" || req.url?.startsWith("/mcp?")) {
 				await this.handleMcpRequest(req, res);
+				return;
+			}
+
+			// SSE transport endpoints (legacy — required by Claude Desktop)
+			if (req.url === "/sse" && req.method === "GET") {
+				await this.handleSseConnect(req, res);
+				return;
+			}
+
+			if (req.url?.startsWith("/messages") && req.method === "POST") {
+				await this.handleSseMessage(req, res);
 				return;
 			}
 
@@ -150,6 +168,38 @@ export class ObsidianMcpServer {
 		await transport.handleRequest(req, res);
 	}
 
+	private async handleSseConnect(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+		const transport = new SSEServerTransport("/messages", res);
+		const server = new McpServer({ name: "obsidian-mcp-server", version: "1.0.0" });
+		registerTools(server, this.app);
+		await server.connect(transport);
+
+		const sid = transport.sessionId;
+		this.sseSessions.set(sid, { server, transport });
+		console.log(`[MCP Server] SSE session created: ${sid} (total: ${this.sseSessions.size})`);
+
+		transport.onclose = () => {
+			this.sseSessions.delete(sid);
+			server.close().catch(() => {});
+			console.log(`[MCP Server] SSE session closed (total: ${this.sseSessions.size})`);
+		};
+
+		await transport.start();
+	}
+
+	private async handleSseMessage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+		const url = new URL(req.url!, `http://localhost`);
+		const sid = url.searchParams.get("sessionId");
+
+		if (!sid || !this.sseSessions.has(sid)) {
+			res.writeHead(404, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "SSE session not found" }));
+			return;
+		}
+
+		await this.sseSessions.get(sid)!.transport.handlePostMessage(req, res);
+	}
+
 	async stop(): Promise<void> {
 		if (this.httpServer) {
 			await new Promise<void>((resolve) => {
@@ -164,6 +214,13 @@ export class ObsidianMcpServer {
 			await transport.close().catch(() => {});
 		}
 		this.sessions.clear();
+
+		for (const { server, transport } of this.sseSessions.values()) {
+			transport.onclose = undefined;
+			await server.close().catch(() => {});
+			await transport.close().catch(() => {});
+		}
+		this.sseSessions.clear();
 
 		this.running = false;
 	}
