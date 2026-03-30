@@ -39,6 +39,7 @@ export function registerTools(server: McpServer, app: App): void {
 	registerSearchVault(server, app);
 	registerGetActiveNote(server, app);
 	registerGetVaultInfo(server, app);
+	registerCreateFolder(server, app);
 }
 
 function registerListFiles(server: McpServer, app: App): void {
@@ -218,6 +219,24 @@ function registerGetActiveNote(server: McpServer, app: App): void {
 			if (!activeFile) return { content: [{ type: "text", text: "Nenhuma nota ativa no momento." }] };
 			const content = await app.vault.read(activeFile);
 			return { content: [{ type: "text", text: JSON.stringify({ path: activeFile.path, content }, null, 2) }] };
+		}
+	);
+}
+
+function registerCreateFolder(server: McpServer, app: App): void {
+	server.registerTool(
+		"create_folder",
+		{
+			description: "Cria uma pasta no vault Obsidian.",
+			inputSchema: {
+				path: z.string().max(MAX_PATH_LENGTH).describe("Caminho da pasta a criar (ex: Projetos/2026)"),
+			},
+		},
+		async ({ path }) => {
+			const safePath = sanitizePath(path);
+			if (app.vault.getAbstractFileByPath(safePath)) throw new Error("Pasta ou arquivo já existe nesse caminho");
+			await app.vault.createFolder(safePath);
+			return { content: [{ type: "text", text: `Pasta criada: ${safePath}` }] };
 		}
 	);
 }
