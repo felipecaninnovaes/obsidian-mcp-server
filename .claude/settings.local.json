@@ -17,7 +17,8 @@
       "mcp__obsidian__search_vault",
       "mcp__obsidian__create_note",
       "mcp__obsidian__update_note",
-      "mcp__obsidian__delete_note"
+      "mcp__obsidian__delete_note",
+      "Bash(npm run:*)"
     ]
   }
 }

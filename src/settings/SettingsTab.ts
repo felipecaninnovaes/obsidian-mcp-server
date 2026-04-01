@@ -33,15 +33,17 @@ export class McpSettingsTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("API Key")
 			.setDesc("Secret key required by MCP clients to authenticate.")
-			.addText((text) =>
+			.addText((text) => {
+				text.inputEl.type = "password";
+				text.inputEl.autocomplete = "off";
 				text
 					.setPlaceholder("auto-generated")
 					.setValue(this.plugin.settings.apiKey)
 					.onChange(async (value) => {
 						this.plugin.settings.apiKey = value;
 						await this.plugin.saveSettings();
-					})
-			)
+					});
+			})
 			.addButton((btn) =>
 				btn.setButtonText("Copy").onClick(() => {
 					navigator.clipboard.writeText(this.plugin.settings.apiKey);

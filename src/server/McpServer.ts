@@ -5,7 +5,30 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { registerTools } from "./tools/index";
 import * as http from "http";
-import { randomBytes } from "crypto";
+import { randomBytes, timingSafeEqual } from "crypto";
+
+// Rate limiting for auth failures
+const authFailures = new Map<string, { count: number; resetAt: number }>();
+const MAX_AUTH_FAILURES = 10;
+const WINDOW_MS = 60_000; // 1 minute
+const MAX_BODY_SIZE = 11 * 1024 * 1024; // 11 MB
+
+function isRateLimited(ip: string): boolean {
+	const now = Date.now();
+	const entry = authFailures.get(ip);
+	if (!entry || now > entry.resetAt) return false;
+	return entry.count >= MAX_AUTH_FAILURES;
+}
+
+function recordAuthFailure(ip: string): void {
+	const now = Date.now();
+	const entry = authFailures.get(ip);
+	if (!entry || now > entry.resetAt) {
+		authFailures.set(ip, { count: 1, resetAt: now + WINDOW_MS });
+	} else {
+		entry.count++;
+	}
+}
 
 interface StreamableSession {
 	server: McpServer;
@@ -18,6 +41,8 @@ interface SseSession {
 }
 
 export class ObsidianMcpServer {
+	private static readonly MAX_SESSIONS = 10;
+
 	private app: App;
 	private settings: McpServerSettings;
 	private httpServer: http.Server | null = null;
@@ -76,9 +101,33 @@ export class ObsidianMcpServer {
 				return;
 			}
 
+			if (req.method === "POST") {
+				const contentLength = parseInt(req.headers["content-length"] ?? "0", 10);
+				if (contentLength > MAX_BODY_SIZE) {
+					res.writeHead(413, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: "Payload too large" }));
+					return;
+				}
+			}
+
 			if (this.settings.enableAuth) {
+				const clientIp = req.socket.remoteAddress ?? "unknown";
+
+				if (isRateLimited(clientIp)) {
+					res.writeHead(429, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: "Too many requests" }));
+					return;
+				}
+
 				const authHeader = req.headers["authorization"];
-				if (authHeader !== `Bearer ${this.settings.apiKey}`) {
+				const expected = `Bearer ${this.settings.apiKey}`;
+				const supplied = authHeader ?? "";
+				const isValid =
+					expected.length === supplied.length &&
+					timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+
+				if (!isValid) {
+					recordAuthFailure(clientIp);
 					res.writeHead(401, { "Content-Type": "application/json" });
 					res.end(JSON.stringify({ error: "Unauthorized" }));
 					return;
@@ -141,6 +190,12 @@ export class ObsidianMcpServer {
 			return;
 		}
 
+		if (this.sessions.size >= ObsidianMcpServer.MAX_SESSIONS) {
+			res.writeHead(503, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "Too many active sessions" }));
+			return;
+		}
+
 		// Cryptographically secure session ID
 		const sid = randomBytes(32).toString("hex");
 
@@ -169,6 +224,12 @@ export class ObsidianMcpServer {
 	}
 
 	private async handleSseConnect(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+		if (this.sseSessions.size >= ObsidianMcpServer.MAX_SESSIONS) {
+			res.writeHead(503, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "Too many active sessions" }));
+			return;
+		}
+
 		const transport = new SSEServerTransport("/messages", res);
 		const server = new McpServer({ name: "obsidian-mcp-server", version: "1.0.0" });
 		registerTools(server, this.app);

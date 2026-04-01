@@ -56,16 +56,26 @@ function registerListFiles(server: McpServer, app: App): void {
 		},
 		async ({ path: targetPath = "", recursive }) => {
 			const safePath = targetPath === "" ? "" : sanitizePath(targetPath);
-			const allFiles = app.vault.getAllLoadedFiles();
 			const results: string[] = [];
 
-			for (const f of allFiles) {
-				const isInPath = safePath === "" || f.path.startsWith(safePath);
-				if (!isInPath) continue;
-				if (!recursive && f instanceof TFolder) {
-					results.push(f.path + "/");
-				} else if (f instanceof TFile) {
-					results.push(f.path);
+			if (!recursive) {
+				// Use folder.children for O(k) direct-child access instead of O(n) vault scan
+				const folder =
+					safePath === ""
+						? app.vault.getRoot()
+						: app.vault.getAbstractFileByPath(safePath);
+				if (!(folder instanceof TFolder)) throw new Error("Pasta não encontrada");
+				for (const child of folder.children) {
+					if (child instanceof TFolder) results.push(child.path + "/");
+					else if (child instanceof TFile) results.push(child.path);
+				}
+			} else {
+				// Recursive — iterate the full vault
+				const prefix = safePath === "" ? "" : safePath + "/";
+				for (const f of app.vault.getAllLoadedFiles()) {
+					if (prefix !== "" && !f.path.startsWith(prefix) && f.path !== safePath) continue;
+					if (f instanceof TFolder) results.push(f.path + "/");
+					else if (f instanceof TFile) results.push(f.path);
 				}
 			}
 
@@ -171,27 +181,36 @@ function registerSearchVault(server: McpServer, app: App): void {
 			},
 		},
 		async ({ query, case_sensitive }) => {
+			const searchFor = case_sensitive ? query : query.toLowerCase();
 			const results: { path: string; matches: number; excerpt: string }[] = [];
-			for (const file of app.vault.getMarkdownFiles()) {
-				const content = await app.vault.cachedRead(file);
-				const searchIn = case_sensitive ? content : content.toLowerCase();
-				const searchFor = case_sensitive ? query : query.toLowerCase();
-				if (!searchIn.includes(searchFor)) continue;
-				const idx = searchIn.indexOf(searchFor);
-				const excerpt =
-					"..." +
-					content
-						.slice(Math.max(0, idx - 100), idx + query.length + 100)
-						.replace(/\n/g, " ") +
-					"...";
-				// Count matches with indexOf loop to avoid ReDoS
-				let matchCount = 0;
-				let pos = 0;
-				while ((pos = searchIn.indexOf(searchFor, pos)) !== -1) {
-					matchCount++;
-					pos += searchFor.length;
+			const mdFiles = app.vault.getMarkdownFiles();
+			const BATCH_SIZE = 50;
+
+			for (let i = 0; i < mdFiles.length; i += BATCH_SIZE) {
+				const batch = mdFiles.slice(i, i + BATCH_SIZE);
+				const items = await Promise.all(
+					batch.map(async (file) => ({ file, content: await app.vault.cachedRead(file) }))
+				);
+
+				for (const { file, content } of items) {
+					const searchIn = case_sensitive ? content : content.toLowerCase();
+					if (!searchIn.includes(searchFor)) continue;
+					const idx = searchIn.indexOf(searchFor);
+					const excerpt =
+						"..." +
+						content
+							.slice(Math.max(0, idx - 100), idx + query.length + 100)
+							.replace(/\n/g, " ") +
+						"...";
+					// Count matches with indexOf loop to avoid ReDoS
+					let matchCount = 0;
+					let pos = 0;
+					while ((pos = searchIn.indexOf(searchFor, pos)) !== -1) {
+						matchCount++;
+						pos += searchFor.length;
+					}
+					results.push({ path: file.path, matches: matchCount, excerpt });
 				}
-				results.push({ path: file.path, matches: matchCount, excerpt });
 			}
 			results.sort((a, b) => b.matches - a.matches);
 			return {
@@ -264,16 +283,17 @@ function registerGetBacklinks(server: McpServer, app: App): void {
 			const basename = withoutExt.split("/").pop() as string;
 			const patterns = Array.from(new Set([withoutExt, basename]));
 
+			// Compile regexes once before the loop
+			const regexes = patterns.map((p) => {
+				const escaped = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+				return new RegExp(`\\[\\[${escaped}(?:\\|[^\\]]*)?\\]\\]`, "i");
+			});
+
 			const backlinks: string[] = [];
 			for (const file of app.vault.getMarkdownFiles()) {
 				if (file.path === safePath) continue;
 				const content = await app.vault.cachedRead(file);
-				const hasLink = patterns.some((p) => {
-					// Match [[pattern]] or [[pattern|alias]]
-					const escaped = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-					return new RegExp(`\\[\\[${escaped}(?:\\|[^\\]]*)?\\]\\]`, "i").test(content);
-				});
-				if (hasLink) backlinks.push(file.path);
+				if (regexes.some((re) => re.test(content))) backlinks.push(file.path);
 			}
 
 			return {
@@ -311,32 +331,37 @@ function registerRenameNote(server: McpServer, app: App): void {
 			const newWithoutExt = safeNewPath.replace(/\.md$/i, "");
 			const newBasename = newWithoutExt.split("/").pop() as string;
 
-			// Update links in all notes before renaming
-			let updatedFiles = 0;
-			for (const note of app.vault.getMarkdownFiles()) {
-				if (note.path === safePath) continue;
-				const original = await app.vault.read(note);
-
-				// Replace [[oldPath|alias]], [[oldPath]], [[oldBasename|alias]], [[oldBasename]]
-				let updated = original;
-				for (const [oldRef, newRef] of [
+			// Compile regexes once before the loop
+			const replacements: [RegExp, string][] = (
+				[
 					[oldWithoutExt, newWithoutExt],
 					[oldBasename, newBasename],
-				] as [string, string][]) {
-					const escaped = oldRef.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-					updated = updated.replace(
-						new RegExp(`\\[\\[${escaped}(\\|[^\\]]*)?\\]\\]`, "gi"),
-						(_, alias) => `[[${newRef}${alias ?? ""}]]`
-					);
-				}
+				] as [string, string][]
+			).map(([oldRef, newRef]) => {
+				const escaped = oldRef.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+				return [new RegExp(`\\[\\[${escaped}(\\|[^\\]]*)?\\]\\]`, "gi"), newRef] as [RegExp, string];
+			});
 
-				if (updated !== original) {
-					await app.vault.modify(note, updated);
-					updatedFiles++;
-				}
-			}
-
+			// Rename the file first so that if link updates fail, the file is still correctly renamed
 			await app.vault.rename(file, safeNewPath);
+
+			let updatedFiles = 0;
+			try {
+				for (const note of app.vault.getMarkdownFiles()) {
+					if (note.path === safeNewPath) continue;
+					const original = await app.vault.read(note);
+					let updated = original;
+					for (const [regex, newRef] of replacements) {
+						updated = updated.replace(regex, (_, alias) => `[[${newRef}${alias ?? ""}]]`);
+					}
+					if (updated !== original) {
+						await app.vault.modify(note, updated);
+						updatedFiles++;
+					}
+				}
+			} catch (e) {
+				console.error("[MCP Server] Error updating links after rename:", e);
+			}
 
 			return {
 				content: [
