@@ -11,6 +11,14 @@ export interface McpServerSettings {
 	networkAccess: boolean;
 	logLevel: LogLevel;
 	permissions: Permissions;
+	/** Enable the semantic_search tool (requires embedding API configuration). */
+	semanticSearch: boolean;
+	/** OpenAI-compatible embeddings endpoint. E.g. https://api.openai.com/v1/embeddings */
+	embeddingEndpoint: string;
+	/** API key for the embedding provider. */
+	embeddingApiKey: string;
+	/** Embedding model name. E.g. text-embedding-3-small */
+	embeddingModel: string;
 }
 
 export const DEFAULT_SETTINGS: McpServerSettings = {
@@ -21,4 +29,8 @@ export const DEFAULT_SETTINGS: McpServerSettings = {
 	networkAccess: false,
 	logLevel: "info",
 	permissions: "read-write",
+	semanticSearch: false,
+	embeddingEndpoint: "https://api.openai.com/v1/embeddings",
+	embeddingApiKey: "",
+	embeddingModel: "text-embedding-3-small",
 };

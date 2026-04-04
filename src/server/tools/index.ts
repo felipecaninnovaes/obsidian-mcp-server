@@ -4,6 +4,7 @@ import { VaultIndex } from "../VaultIndex";
 import { BacklinkIndex } from "../BacklinkIndex";
 import { DeleteLog } from "../DeleteLog";
 import { AuditLog } from "../AuditLog";
+import { SemanticIndex } from "../SemanticIndex";
 import type { Permissions } from "../../types";
 import { registerFileTools } from "./fileTools";
 import { registerSearchTools } from "./searchTools";
@@ -11,6 +12,7 @@ import { registerMetadataTools } from "./metadataTools";
 import { registerGraphTools } from "./graphTools";
 import { registerDailyNoteTools } from "./dailyNoteTools";
 import { registerCanvasTools } from "./canvasTools";
+import { registerSemanticSearchTools } from "./semanticSearchTools";
 import { registerVaultResources } from "./resources";
 
 /** All cross-cutting dependencies threaded into tool handlers. */
@@ -22,6 +24,7 @@ export interface ToolDependencies {
 	auditLog: AuditLog;
 	/** Cryptographic session ID baked in at session-creation time for audit entries. */
 	sessionId: string;
+	semanticIndex: SemanticIndex;
 }
 
 export function registerTools(server: McpServer, app: App, deps: ToolDependencies): void {
@@ -31,5 +34,6 @@ export function registerTools(server: McpServer, app: App, deps: ToolDependencie
 	registerGraphTools(server, app, deps.vaultIndex, deps.backlinkIndex);
 	registerDailyNoteTools(server, app);
 	registerCanvasTools(server, app, deps);
+	registerSemanticSearchTools(server, app, deps.semanticIndex);
 	registerVaultResources(server, app);
 }

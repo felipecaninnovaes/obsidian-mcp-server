@@ -126,6 +126,81 @@ export class McpSettingsTab extends PluginSettingTab {
 					})
 			);
 
+		// ── Semantic search ───────────────────────────────────────────────────────
+
+		// eslint-disable-next-line obsidianmd/settings-tab/no-manual-html-headings, obsidianmd/ui/sentence-case
+		containerEl.createEl("h3", { text: "Semantic Search" });
+
+		new Setting(containerEl)
+			.setName("Enable semantic search")
+			.setDesc(
+				"Expose the semantic_search tool. " +
+				"Requires a configured embedding endpoint and API key below."
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.semanticSearch)
+					.onChange(async (value) => {
+						this.plugin.settings.semanticSearch = value;
+						await this.plugin.saveSettings();
+						if (value) {
+							this.plugin.semanticIndex.configure({
+								endpoint: this.plugin.settings.embeddingEndpoint,
+								apiKey: this.plugin.settings.embeddingApiKey,
+								model: this.plugin.settings.embeddingModel,
+							});
+						}
+						this.display();
+					})
+			);
+
+		if (this.plugin.settings.semanticSearch) {
+			new Setting(containerEl)
+				.setName("Embedding endpoint")
+				.setDesc(
+					"OpenAI-compatible embeddings URL. " +
+					"Examples: https://api.openai.com/v1/embeddings (OpenAI), " +
+					"http://localhost:11434/v1/embeddings (Ollama)."
+				)
+				.addText((text) =>
+					text
+						.setPlaceholder("https://api.openai.com/v1/embeddings")
+						.setValue(this.plugin.settings.embeddingEndpoint)
+						.onChange(async (value) => {
+							this.plugin.settings.embeddingEndpoint = value;
+							await this.plugin.saveSettings();
+						})
+				);
+
+			new Setting(containerEl)
+				.setName("Embedding API key")
+				.setDesc("API key for the embedding provider.")
+				.addText((text) => {
+					text.inputEl.type = "password";
+					text.inputEl.autocomplete = "off";
+					text
+						.setPlaceholder("sk-...")
+						.setValue(this.plugin.settings.embeddingApiKey)
+						.onChange(async (value) => {
+							this.plugin.settings.embeddingApiKey = value;
+							await this.plugin.saveSettings();
+						});
+				});
+
+			new Setting(containerEl)
+				.setName("Embedding model")
+				.setDesc("Model name to pass to the embedding API.")
+				.addText((text) =>
+					text
+						.setPlaceholder("text-embedding-3-small")
+						.setValue(this.plugin.settings.embeddingModel)
+						.onChange(async (value) => {
+							this.plugin.settings.embeddingModel = value;
+							await this.plugin.saveSettings();
+						})
+				);
+		}
+
 		const bindHost = this.plugin.settings.networkAccess ? "0.0.0.0" : "localhost";
 		const statusDesc = this.plugin.mcpServer?.isRunning()
 			? `Running on http://${bindHost}:${this.plugin.settings.port}/mcp`

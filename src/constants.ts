@@ -22,3 +22,16 @@ export const QUERY_RESULTS_MAX = 200;
 export const MAX_REGEX_QUERY_LENGTH = 200;
 /** Maximum number of total regex matches before aborting a file scan. */
 export const REGEX_MATCH_LIMIT = 1_000;
+
+// ── Semantic search ───────────────────────────────────────────────────────────
+
+/** Debounce delay before re-embedding a modified file (ms). */
+export const EMBEDDING_DEBOUNCE_MS = 5_000;
+/** Vault-relative path for the embeddings persistence file. */
+export const EMBEDDING_STORAGE_PATH = ".obsidian/plugins/obsidian-mcp-server/embeddings.json";
+/** Max characters of (title + first paragraph) sent to the embedding API. */
+export const EMBEDDING_TEXT_MAX_CHARS = 500;
+/** Default number of semantic search results. */
+export const SEMANTIC_SEARCH_DEFAULT = 10;
+/** Maximum number of semantic search results. */
+export const SEMANTIC_SEARCH_MAX = 50;

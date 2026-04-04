@@ -26,3 +26,5 @@ export class Notice {
 export const moment = () => ({});
 
 export class MetadataCache {}
+
+export class DataAdapter {}

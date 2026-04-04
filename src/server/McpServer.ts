@@ -7,6 +7,7 @@ import { registerTools } from "./tools/index";
 import { VaultIndex } from "./VaultIndex";
 import { BacklinkIndex } from "./BacklinkIndex";
 import { DeleteLog } from "./DeleteLog";
+import { SemanticIndex } from "./SemanticIndex";
 import { isRateLimited, recordAuthFailure, cleanupExpiredEntries, SessionRateLimiter } from "./rateLimiting";
 import { AuditLog } from "./AuditLog";
 import { logger } from "../logger";
@@ -34,6 +35,7 @@ export class ObsidianMcpServer {
 	private vaultIndex: VaultIndex;
 	private backlinkIndex: BacklinkIndex;
 	private deleteLog: DeleteLog;
+	private semanticIndex: SemanticIndex;
 	private readonly auditLog = new AuditLog();
 	private readonly sessionRateLimiter = new SessionRateLimiter();
 	private httpServer: http.Server | null = null;
@@ -42,12 +44,13 @@ export class ObsidianMcpServer {
 	private running = false;
 	private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
-	constructor(app: App, settings: McpServerSettings, vaultIndex: VaultIndex, backlinkIndex: BacklinkIndex, deleteLog: DeleteLog) {
+	constructor(app: App, settings: McpServerSettings, vaultIndex: VaultIndex, backlinkIndex: BacklinkIndex, deleteLog: DeleteLog, semanticIndex: SemanticIndex) {
 		this.app = app;
 		this.settings = settings;
 		this.vaultIndex = vaultIndex;
 		this.backlinkIndex = backlinkIndex;
 		this.deleteLog = deleteLog;
+		this.semanticIndex = semanticIndex;
 	}
 
 	/**
@@ -253,6 +256,7 @@ export class ObsidianMcpServer {
 			permissions: this.settings.permissions,
 			auditLog: this.auditLog,
 			sessionId: sid,
+			semanticIndex: this.semanticIndex,
 		});
 		await server.connect(transport);
 
@@ -289,6 +293,7 @@ export class ObsidianMcpServer {
 			permissions: this.settings.permissions,
 			auditLog: this.auditLog,
 			sessionId: sid,
+			semanticIndex: this.semanticIndex,
 		});
 		await server.connect(transport);
 
