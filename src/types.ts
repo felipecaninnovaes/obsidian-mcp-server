@@ -1,5 +1,8 @@
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
+/** Controls which MCP tools are exposed to clients. */
+export type Permissions = "read-only" | "read-write";
+
 export interface McpServerSettings {
 	port: number;
 	apiKey: string;
@@ -7,6 +10,7 @@ export interface McpServerSettings {
 	autoStart: boolean;
 	networkAccess: boolean;
 	logLevel: LogLevel;
+	permissions: Permissions;
 }
 
 export const DEFAULT_SETTINGS: McpServerSettings = {
@@ -16,4 +20,5 @@ export const DEFAULT_SETTINGS: McpServerSettings = {
 	autoStart: true,
 	networkAccess: false,
 	logLevel: "info",
+	permissions: "read-write",
 };

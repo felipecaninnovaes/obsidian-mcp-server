@@ -1,20 +1,23 @@
 import { App, TFile, TFolder } from "obsidian";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { sanitizePath, applyTextEdit, MAX_PATH_LENGTH } from "./utils";
+import { sanitizePath, applyTextEdit, assertWritePermission, MAX_PATH_LENGTH } from "./utils";
 import { resolveNoteFile } from "./noteUtils";
 import { logger } from "../../logger";
 import { MAX_CONTENT_LENGTH } from "../../constants";
+import { summarizeParams } from "../AuditLog";
+import type { ToolDependencies } from "./index";
 
-export function registerFileTools(server: McpServer, app: App): void {
+export function registerFileTools(server: McpServer, app: App, deps: ToolDependencies): void {
+	const { permissions, auditLog, sessionId } = deps;
 	registerListFiles(server, app);
 	registerReadNote(server, app);
-	registerCreateNote(server, app);
-	registerUpdateNote(server, app);
-	registerDeleteNote(server, app);
-	registerRenameNote(server, app);
-	registerEditNote(server, app);
-	registerCreateFolder(server, app);
+	registerCreateNote(server, app, permissions, auditLog, sessionId);
+	registerUpdateNote(server, app, permissions, auditLog, sessionId);
+	registerDeleteNote(server, app, permissions, auditLog, sessionId);
+	registerRenameNote(server, app, permissions, auditLog, sessionId);
+	registerEditNote(server, app, permissions, auditLog, sessionId);
+	registerCreateFolder(server, app, permissions, auditLog, sessionId);
 }
 
 function registerListFiles(server: McpServer, app: App): void {
@@ -32,7 +35,6 @@ function registerListFiles(server: McpServer, app: App): void {
 			const results: string[] = [];
 
 			if (!recursive) {
-				// Use folder.children for O(k) direct-child access instead of O(n) vault scan
 				const folder =
 					safePath === ""
 						? app.vault.getRoot()
@@ -43,7 +45,6 @@ function registerListFiles(server: McpServer, app: App): void {
 					else if (child instanceof TFile) results.push(child.path);
 				}
 			} else {
-				// Recursive — iterate the full vault
 				const prefix = safePath === "" ? "" : safePath + "/";
 				for (const f of app.vault.getAllLoadedFiles()) {
 					if (prefix !== "" && !f.path.startsWith(prefix) && f.path !== safePath) continue;
@@ -78,7 +79,12 @@ function registerReadNote(server: McpServer, app: App): void {
 	);
 }
 
-function registerCreateNote(server: McpServer, app: App): void {
+function registerCreateNote(
+	server: McpServer, app: App,
+	permissions: ToolDependencies["permissions"],
+	auditLog: ToolDependencies["auditLog"],
+	sessionId: string
+): void {
 	server.registerTool(
 		"create_note",
 		{
@@ -89,15 +95,22 @@ function registerCreateNote(server: McpServer, app: App): void {
 			},
 		},
 		async ({ path, content }) => {
+			assertWritePermission(permissions);
 			const safePath = sanitizePath(path);
 			if (app.vault.getAbstractFileByPath(safePath)) throw new Error("Arquivo já existe");
 			await app.vault.create(safePath, content);
+			auditLog.record({ timestamp: Date.now(), sessionId, tool: "create_note", params_summary: summarizeParams({ path: safePath }), result: "ok" });
 			return { content: [{ type: "text", text: `Nota criada: ${safePath}` }] };
 		}
 	);
 }
 
-function registerUpdateNote(server: McpServer, app: App): void {
+function registerUpdateNote(
+	server: McpServer, app: App,
+	permissions: ToolDependencies["permissions"],
+	auditLog: ToolDependencies["auditLog"],
+	sessionId: string
+): void {
 	server.registerTool(
 		"update_note",
 		{
@@ -109,6 +122,7 @@ function registerUpdateNote(server: McpServer, app: App): void {
 			},
 		},
 		async ({ path, content, mode }) => {
+			assertWritePermission(permissions);
 			const safePath = sanitizePath(path);
 			const file = resolveNoteFile(app, safePath);
 			if (!file) throw new Error("Arquivo não encontrado");
@@ -119,12 +133,18 @@ function registerUpdateNote(server: McpServer, app: App): void {
 			} else {
 				await app.vault.modify(file, content + "\n" + (await app.vault.read(file)));
 			}
+			auditLog.record({ timestamp: Date.now(), sessionId, tool: "update_note", params_summary: summarizeParams({ path: safePath, mode }), result: "ok" });
 			return { content: [{ type: "text", text: `Nota atualizada (${mode})` }] };
 		}
 	);
 }
 
-function registerDeleteNote(server: McpServer, app: App): void {
+function registerDeleteNote(
+	server: McpServer, app: App,
+	permissions: ToolDependencies["permissions"],
+	auditLog: ToolDependencies["auditLog"],
+	sessionId: string
+): void {
 	server.registerTool(
 		"delete_note",
 		{
@@ -134,16 +154,23 @@ function registerDeleteNote(server: McpServer, app: App): void {
 			},
 		},
 		async ({ path }) => {
+			assertWritePermission(permissions);
 			const safePath = sanitizePath(path);
 			const file = resolveNoteFile(app, safePath);
 			if (!file) throw new Error("Arquivo não encontrado");
 			await app.vault.delete(file);
+			auditLog.record({ timestamp: Date.now(), sessionId, tool: "delete_note", params_summary: summarizeParams({ path: safePath }), result: "ok" });
 			return { content: [{ type: "text", text: "Arquivo deletado" }] };
 		}
 	);
 }
 
-function registerRenameNote(server: McpServer, app: App): void {
+function registerRenameNote(
+	server: McpServer, app: App,
+	permissions: ToolDependencies["permissions"],
+	auditLog: ToolDependencies["auditLog"],
+	sessionId: string
+): void {
 	server.registerTool(
 		"rename_note",
 		{
@@ -154,6 +181,7 @@ function registerRenameNote(server: McpServer, app: App): void {
 			},
 		},
 		async ({ path, new_path }) => {
+			assertWritePermission(permissions);
 			const safePath = sanitizePath(path);
 			const safeNewPath = sanitizePath(new_path);
 
@@ -166,7 +194,6 @@ function registerRenameNote(server: McpServer, app: App): void {
 			const newWithoutExt = safeNewPath.replace(/\.md$/i, "");
 			const newBasename = newWithoutExt.split("/").pop() as string;
 
-			// Compile regexes once before the loop
 			const replacements: [RegExp, string][] = (
 				[
 					[oldWithoutExt, newWithoutExt],
@@ -177,7 +204,6 @@ function registerRenameNote(server: McpServer, app: App): void {
 				return [new RegExp(`\\[\\[${escaped}(\\|[^\\]]*)?\\]\\]`, "gi"), newRef] as [RegExp, string];
 			});
 
-			// Rename the file first so that if link updates fail, the file is still correctly renamed
 			await app.vault.rename(file, safeNewPath);
 
 			let updatedFiles = 0;
@@ -198,6 +224,7 @@ function registerRenameNote(server: McpServer, app: App): void {
 				logger.error("Error updating links after rename:", e);
 			}
 
+			auditLog.record({ timestamp: Date.now(), sessionId, tool: "rename_note", params_summary: summarizeParams({ from: safePath, to: safeNewPath }), result: "ok" });
 			return {
 				content: [
 					{
@@ -210,7 +237,12 @@ function registerRenameNote(server: McpServer, app: App): void {
 	);
 }
 
-function registerEditNote(server: McpServer, app: App): void {
+function registerEditNote(
+	server: McpServer, app: App,
+	permissions: ToolDependencies["permissions"],
+	auditLog: ToolDependencies["auditLog"],
+	sessionId: string
+): void {
 	server.registerTool(
 		"edit_note",
 		{
@@ -229,18 +261,19 @@ function registerEditNote(server: McpServer, app: App): void {
 			},
 		},
 		async ({ path, old_text, new_text, expected_occurrences }) => {
+			assertWritePermission(permissions);
 			const safePath = sanitizePath(path);
 			const file = resolveNoteFile(app, safePath);
 			if (!file) throw new Error("Arquivo não encontrado");
 
 			let occurrencesReplaced = 0;
-
 			await app.vault.process(file, (content) => {
 				const result = applyTextEdit(content, old_text, new_text, expected_occurrences);
 				occurrencesReplaced = result.count;
 				return result.content;
 			});
 
+			auditLog.record({ timestamp: Date.now(), sessionId, tool: "edit_note", params_summary: summarizeParams({ path: safePath, occurrences: occurrencesReplaced }), result: "ok" });
 			return {
 				content: [
 					{
@@ -253,7 +286,12 @@ function registerEditNote(server: McpServer, app: App): void {
 	);
 }
 
-function registerCreateFolder(server: McpServer, app: App): void {
+function registerCreateFolder(
+	server: McpServer, app: App,
+	permissions: ToolDependencies["permissions"],
+	auditLog: ToolDependencies["auditLog"],
+	sessionId: string
+): void {
 	server.registerTool(
 		"create_folder",
 		{
@@ -263,9 +301,11 @@ function registerCreateFolder(server: McpServer, app: App): void {
 			},
 		},
 		async ({ path }) => {
+			assertWritePermission(permissions);
 			const safePath = sanitizePath(path);
 			if (app.vault.getAbstractFileByPath(safePath)) throw new Error("Pasta ou arquivo já existe nesse caminho");
 			await app.vault.createFolder(safePath);
+			auditLog.record({ timestamp: Date.now(), sessionId, tool: "create_folder", params_summary: summarizeParams({ path: safePath }), result: "ok" });
 			return { content: [{ type: "text", text: `Pasta criada: ${safePath}` }] };
 		}
 	);

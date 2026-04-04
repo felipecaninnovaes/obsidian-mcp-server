@@ -7,7 +7,8 @@ import { registerTools } from "./tools/index";
 import { VaultIndex } from "./VaultIndex";
 import { BacklinkIndex } from "./BacklinkIndex";
 import { DeleteLog } from "./DeleteLog";
-import { isRateLimited, recordAuthFailure, cleanupExpiredEntries } from "./rateLimiting";
+import { isRateLimited, recordAuthFailure, cleanupExpiredEntries, SessionRateLimiter } from "./rateLimiting";
+import { AuditLog } from "./AuditLog";
 import { logger } from "../logger";
 import * as http from "http";
 import { randomBytes, timingSafeEqual } from "crypto";
@@ -33,6 +34,8 @@ export class ObsidianMcpServer {
 	private vaultIndex: VaultIndex;
 	private backlinkIndex: BacklinkIndex;
 	private deleteLog: DeleteLog;
+	private readonly auditLog = new AuditLog();
+	private readonly sessionRateLimiter = new SessionRateLimiter();
 	private httpServer: http.Server | null = null;
 	private sessions = new Map<string, StreamableSession>();
 	private sseSessions = new Map<string, SseSession>();
@@ -202,6 +205,11 @@ export class ObsidianMcpServer {
 
 		// Route to existing session
 		if (sessionId && this.sessions.has(sessionId)) {
+			if (!this.sessionRateLimiter.check(sessionId)) {
+				res.writeHead(429, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: "Too many requests — session rate limit exceeded (120 req/min)" }));
+				return;
+			}
 			await this.sessions.get(sessionId)!.transport.handleRequest(req, res);
 			return;
 		}
@@ -238,7 +246,14 @@ export class ObsidianMcpServer {
 			version: "1.0.0",
 		});
 
-		registerTools(server, this.app, this.vaultIndex, this.backlinkIndex, this.deleteLog);
+		registerTools(server, this.app, {
+			vaultIndex: this.vaultIndex,
+			backlinkIndex: this.backlinkIndex,
+			deleteLog: this.deleteLog,
+			permissions: this.settings.permissions,
+			auditLog: this.auditLog,
+			sessionId: sid,
+		});
 		await server.connect(transport);
 
 		const cleanupVaultListeners = this.setupVaultListeners(server);
@@ -248,6 +263,7 @@ export class ObsidianMcpServer {
 		transport.onclose = () => {
 			this.sessions.get(sid)?.cleanupVaultListeners();
 			this.sessions.delete(sid);
+			this.sessionRateLimiter.evict(sid);
 			server.close().catch(() => {});
 			logger.debug(`Session closed (total: ${this.sessions.size})`);
 		};
@@ -265,10 +281,17 @@ export class ObsidianMcpServer {
 		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		const transport = new SSEServerTransport("/messages", res);
 		const server = new McpServer({ name: "obsidian-mcp-server", version: "1.0.0" });
-		registerTools(server, this.app, this.vaultIndex, this.backlinkIndex, this.deleteLog);
+		const sid = transport.sessionId;
+		registerTools(server, this.app, {
+			vaultIndex: this.vaultIndex,
+			backlinkIndex: this.backlinkIndex,
+			deleteLog: this.deleteLog,
+			permissions: this.settings.permissions,
+			auditLog: this.auditLog,
+			sessionId: sid,
+		});
 		await server.connect(transport);
 
-		const sid = transport.sessionId;
 		const cleanupVaultListeners = this.setupVaultListeners(server);
 		this.sseSessions.set(sid, { server, transport, cleanupVaultListeners });
 		logger.debug(`SSE session created: ${sid} (total: ${this.sseSessions.size})`);
@@ -276,6 +299,7 @@ export class ObsidianMcpServer {
 		transport.onclose = () => {
 			this.sseSessions.get(sid)?.cleanupVaultListeners();
 			this.sseSessions.delete(sid);
+			this.sessionRateLimiter.evict(sid);
 			server.close().catch(() => {});
 			logger.debug(`SSE session closed (total: ${this.sseSessions.size})`);
 		};
@@ -290,6 +314,12 @@ export class ObsidianMcpServer {
 		if (!sid || !this.sseSessions.has(sid)) {
 			res.writeHead(404, { "Content-Type": "application/json" });
 			res.end(JSON.stringify({ error: "SSE session not found" }));
+			return;
+		}
+
+		if (!this.sessionRateLimiter.check(sid)) {
+			res.writeHead(429, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "Too many requests — session rate limit exceeded (120 req/min)" }));
 			return;
 		}
 

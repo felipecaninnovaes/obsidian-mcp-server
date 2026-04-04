@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type McpServerPlugin from "../main";
-import type { LogLevel } from "../types";
+import type { LogLevel, Permissions } from "../types";
 
 export class McpSettingsTab extends PluginSettingTab {
 	plugin: McpServerPlugin;
@@ -106,6 +106,22 @@ export class McpSettingsTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.logLevel)
 					.onChange(async (value) => {
 						this.plugin.settings.logLevel = value as LogLevel;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Permissions")
+			.setDesc(
+				"'Read-write' allows all tools including note creation, editing, and deletion. " +
+				"'Read-only' restricts clients to read and search operations only."
+			)
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({ "read-write": "Read-write", "read-only": "Read-only" })
+					.setValue(this.plugin.settings.permissions)
+					.onChange(async (value) => {
+						this.plugin.settings.permissions = value as Permissions;
 						await this.plugin.saveSettings();
 					})
 			);

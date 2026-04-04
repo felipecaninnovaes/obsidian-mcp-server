@@ -3,6 +3,7 @@
  */
 
 import { MAX_PATH_LENGTH as _MAX_PATH_LENGTH } from "../../constants";
+import type { Permissions } from "../../types";
 
 // Re-export so existing imports from this file continue to work.
 export { MAX_PATH_LENGTH } from "../../constants";
@@ -29,6 +30,16 @@ export function sanitizePath(path: string): string {
 		throw new Error("Invalid path: empty after normalization");
 	}
 	return normalized;
+}
+
+/**
+ * Throws if the server is configured as read-only.
+ * Call at the top of every write-operation tool handler.
+ */
+export function assertWritePermission(permissions: Permissions): void {
+	if (permissions === "read-only") {
+		throw new Error("Operação não permitida: servidor em modo read-only");
+	}
 }
 
 /**

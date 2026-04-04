@@ -1,18 +1,22 @@
 import { App, TFolder } from "obsidian";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { sanitizePath, MAX_PATH_LENGTH } from "./utils";
+import { sanitizePath, assertWritePermission, MAX_PATH_LENGTH } from "./utils";
 import { resolveNoteFile } from "./noteUtils";
+import { summarizeParams } from "../AuditLog";
 import { DeleteLog } from "../DeleteLog";
+import type { ToolDependencies } from "./index";
 
-export function registerMetadataTools(server: McpServer, app: App, deleteLog: DeleteLog): void {
+export function registerMetadataTools(server: McpServer, app: App, deps: ToolDependencies): void {
+	const { deleteLog, permissions, auditLog, sessionId } = deps;
 	registerGetNoteMetadata(server, app);
 	registerListTags(server, app);
 	registerGetNoteLinks(server, app);
 	registerGetBacklinks(server, app);
-	registerUpdateNoteMetadata(server, app);
+	registerUpdateNoteMetadata(server, app, permissions, auditLog, sessionId);
 	registerGetVaultContext(server, app);
 	registerGetVaultChanges(server, app, deleteLog);
+	registerGetAuditLog(server, auditLog);
 }
 
 function registerGetNoteMetadata(server: McpServer, app: App): void {
@@ -162,7 +166,12 @@ function registerGetBacklinks(server: McpServer, app: App): void {
 /** Regex to detect and capture the frontmatter block at the start of a file. */
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
-function registerUpdateNoteMetadata(server: McpServer, app: App): void {
+function registerUpdateNoteMetadata(
+	server: McpServer, app: App,
+	permissions: ToolDependencies["permissions"],
+	auditLog: ToolDependencies["auditLog"],
+	sessionId: string
+): void {
 	server.registerTool(
 		"update_note_metadata",
 		{
@@ -177,6 +186,7 @@ function registerUpdateNoteMetadata(server: McpServer, app: App): void {
 			},
 		},
 		async ({ path, set, remove }) => {
+			assertWritePermission(permissions);
 			if (!set && !remove?.length) {
 				throw new Error("Forneça ao menos 'set' ou 'remove'");
 			}
@@ -213,6 +223,7 @@ function registerUpdateNoteMetadata(server: McpServer, app: App): void {
 				return yamlBlock + body;
 			});
 
+			auditLog.record({ timestamp: Date.now(), sessionId, tool: "update_note_metadata", params_summary: summarizeParams({ path: safePath, set, remove }), result: "ok" });
 			return {
 				content: [
 					{
@@ -286,6 +297,44 @@ function registerGetVaultContext(server: McpServer, app: App): void {
 							null,
 							2
 						),
+					},
+				],
+			};
+		}
+	);
+}
+
+// ── get_audit_log ─────────────────────────────────────────────────────────────
+
+function registerGetAuditLog(server: McpServer, auditLog: ToolDependencies["auditLog"]): void {
+	server.registerTool(
+		"get_audit_log",
+		{
+			description:
+				"Retorna as operações de escrita recentes registradas pelo servidor (in-memory, últimas 500). " +
+				"Útil para auditar o que foi modificado na sessão atual.",
+			inputSchema: {
+				limit: z
+					.number()
+					.int()
+					.min(1)
+					.max(500)
+					.optional()
+					.default(50)
+					.describe("Número máximo de entradas a retornar, mais recentes primeiro (default 50)."),
+				tool: z
+					.string()
+					.optional()
+					.describe("Filtrar por nome de tool (ex: 'create_note'). Omitir para todas."),
+			},
+		},
+		async ({ limit, tool }) => {
+			const entries = auditLog.getRecent(limit, tool);
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({ total: entries.length, entries }, null, 2),
 					},
 				],
 			};
