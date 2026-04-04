@@ -8,6 +8,20 @@ import { logger } from "../../logger";
 const MAX_CONTENT_LENGTH = 10_000_000; // 10 MB
 const MAX_QUERY_LENGTH = 1_000;
 
+/**
+ * Resolves a vault path to a TFile, auto-appending ".md" when the path has no
+ * extension and the bare path is not found. LLMs commonly omit the extension.
+ */
+function resolveNoteFile(app: App, safePath: string): TFile | null {
+	const direct = app.vault.getAbstractFileByPath(safePath);
+	if (direct instanceof TFile) return direct;
+	if (!/\.[^/]+$/.test(safePath)) {
+		const withMd = app.vault.getAbstractFileByPath(safePath + ".md");
+		if (withMd instanceof TFile) return withMd;
+	}
+	return null;
+}
+
 export function registerTools(server: McpServer, app: App, vaultIndex: VaultIndex): void {
 	registerListFiles(server, app);
 	registerReadNote(server, app);
@@ -84,8 +98,8 @@ function registerReadNote(server: McpServer, app: App): void {
 		},
 		async ({ path }) => {
 			const safePath = sanitizePath(path);
-			const file = app.vault.getAbstractFileByPath(safePath);
-			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
+			const file = resolveNoteFile(app, safePath);
+			if (!file) throw new Error("Arquivo não encontrado");
 			const content = await app.vault.read(file);
 			return { content: [{ type: "text", text: content }] };
 		}
@@ -124,8 +138,8 @@ function registerUpdateNote(server: McpServer, app: App): void {
 		},
 		async ({ path, content, mode }) => {
 			const safePath = sanitizePath(path);
-			const file = app.vault.getAbstractFileByPath(safePath);
-			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
+			const file = resolveNoteFile(app, safePath);
+			if (!file) throw new Error("Arquivo não encontrado");
 			if (mode === "overwrite") {
 				await app.vault.modify(file, content);
 			} else if (mode === "append") {
@@ -149,8 +163,8 @@ function registerDeleteNote(server: McpServer, app: App): void {
 		},
 		async ({ path }) => {
 			const safePath = sanitizePath(path);
-			const file = app.vault.getAbstractFileByPath(safePath);
-			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
+			const file = resolveNoteFile(app, safePath);
+			if (!file) throw new Error("Arquivo não encontrado");
 			await app.vault.delete(file);
 			return { content: [{ type: "text", text: "Arquivo deletado" }] };
 		}
@@ -272,8 +286,8 @@ function registerGetBacklinks(server: McpServer, app: App): void {
 		},
 		async ({ path }) => {
 			const safePath = sanitizePath(path);
-			const target = app.vault.getAbstractFileByPath(safePath);
-			if (!(target instanceof TFile)) throw new Error("Arquivo não encontrado");
+			const target = resolveNoteFile(app, safePath);
+			if (!target) throw new Error("Arquivo não encontrado");
 
 			// Use metadataCache.resolvedLinks for O(n) index lookup instead of scanning file content
 			const resolvedLinks = app.metadataCache.resolvedLinks;
@@ -309,8 +323,8 @@ function registerRenameNote(server: McpServer, app: App): void {
 			const safePath = sanitizePath(path);
 			const safeNewPath = sanitizePath(new_path);
 
-			const file = app.vault.getAbstractFileByPath(safePath);
-			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
+			const file = resolveNoteFile(app, safePath);
+			if (!file) throw new Error("Arquivo não encontrado");
 			if (app.vault.getAbstractFileByPath(safeNewPath)) throw new Error("Já existe um arquivo no novo caminho");
 
 			const oldWithoutExt = safePath.replace(/\.md$/i, "");
@@ -382,8 +396,8 @@ function registerEditNote(server: McpServer, app: App): void {
 		},
 		async ({ path, old_text, new_text, expected_occurrences }) => {
 			const safePath = sanitizePath(path);
-			const file = app.vault.getAbstractFileByPath(safePath);
-			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
+			const file = resolveNoteFile(app, safePath);
+			if (!file) throw new Error("Arquivo não encontrado");
 
 			let occurrencesReplaced = 0;
 
@@ -547,8 +561,8 @@ function registerQueryVault(server: McpServer, app: App): void {
 			let targetPath: string | null = null;
 			if (links_to) {
 				const safeLinksTo = sanitizePath(links_to);
-				const targetFile = app.vault.getAbstractFileByPath(safeLinksTo);
-				if (!(targetFile instanceof TFile)) throw new Error(`Nota não encontrada: ${safeLinksTo}`);
+				const targetFile = resolveNoteFile(app, safeLinksTo);
+				if (!targetFile) throw new Error(`Nota não encontrada: ${safeLinksTo}`);
 				targetPath = targetFile.path;
 			}
 
@@ -631,8 +645,8 @@ function registerGetNoteMetadata(server: McpServer, app: App): void {
 		},
 		async ({ path }) => {
 			const safePath = sanitizePath(path);
-			const file = app.vault.getAbstractFileByPath(safePath);
-			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
+			const file = resolveNoteFile(app, safePath);
+			if (!file) throw new Error("Arquivo não encontrado");
 			const cache = app.metadataCache.getFileCache(file);
 			const frontmatter = cache?.frontmatter;
 			let metadata: Record<string, unknown> | null = null;
@@ -695,8 +709,8 @@ function registerGetNoteLinks(server: McpServer, app: App): void {
 		},
 		async ({ path }) => {
 			const safePath = sanitizePath(path);
-			const file = app.vault.getAbstractFileByPath(safePath);
-			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
+			const file = resolveNoteFile(app, safePath);
+			if (!file) throw new Error("Arquivo não encontrado");
 			const cache = app.metadataCache.getFileCache(file);
 
 			const links = (cache?.links ?? []).map((l) => ({
@@ -782,8 +796,8 @@ function registerGetGraphNeighbors(server: McpServer, app: App): void {
 		},
 		async ({ path, depth, direction }) => {
 			const safePath = sanitizePath(path);
-			const target = app.vault.getAbstractFileByPath(safePath);
-			if (!(target instanceof TFile)) throw new Error("Arquivo não encontrado");
+			const target = resolveNoteFile(app, safePath);
+			if (!target) throw new Error("Arquivo não encontrado");
 
 			const resolvedLinks = app.metadataCache.resolvedLinks;
 
@@ -871,8 +885,8 @@ function registerSuggestLinks(server: McpServer, app: App): void {
 		},
 		async ({ path, limit }) => {
 			const safePath = sanitizePath(path);
-			const file = app.vault.getAbstractFileByPath(safePath);
-			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
+			const file = resolveNoteFile(app, safePath);
+			if (!file) throw new Error("Arquivo não encontrado");
 
 			const rawContent = await app.vault.cachedRead(file);
 
@@ -1028,8 +1042,8 @@ function registerVaultResources(server: McpServer, app: App): void {
 			// {+path} template may leave reserved chars unencoded, but clients may percent-encode spaces
 			const decodedPath = decodeURIComponent(path);
 			const safePath = sanitizePath(decodedPath);
-			const file = app.vault.getAbstractFileByPath(safePath);
-			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
+			const file = resolveNoteFile(app, safePath);
+			if (!file) throw new Error("Arquivo não encontrado");
 			const content = await app.vault.cachedRead(file);
 			return {
 				contents: [
