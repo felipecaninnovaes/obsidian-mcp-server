@@ -18,7 +18,13 @@
       "mcp__obsidian__create_note",
       "mcp__obsidian__update_note",
       "mcp__obsidian__delete_note",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "mcp__obsidian__create_folder",
+      "mcp__obsidian__get_backlinks",
+      "mcp__obsidian__rename_note",
+      "mcp__obsidian__list_tags",
+      "mcp__obsidian__get_note_metadata",
+      "mcp__obsidian__get_note_links"
     ]
   }
 }

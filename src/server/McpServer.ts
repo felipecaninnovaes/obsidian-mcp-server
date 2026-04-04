@@ -49,6 +49,7 @@ export class ObsidianMcpServer {
 	private sessions = new Map<string, StreamableSession>();
 	private sseSessions = new Map<string, SseSession>();
 	private running = false;
+	private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
 	constructor(app: App, settings: McpServerSettings) {
 		this.app = app;
@@ -108,6 +109,13 @@ export class ObsidianMcpServer {
 					res.end(JSON.stringify({ error: "Payload too large" }));
 					return;
 				}
+
+				const ct = req.headers["content-type"] ?? "";
+				if (!ct.startsWith("application/json")) {
+					res.writeHead(415, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: "Unsupported Media Type: Content-Type must be application/json" }));
+					return;
+				}
 			}
 
 			if (this.settings.enableAuth) {
@@ -165,6 +173,14 @@ export class ObsidianMcpServer {
 		});
 
 		this.running = true;
+
+		// Periodically evict expired rate-limit entries to prevent unbounded memory growth
+		this.cleanupInterval = setInterval(() => {
+			const now = Date.now();
+			for (const [ip, entry] of authFailures) {
+				if (now > entry.resetAt) authFailures.delete(ip);
+			}
+		}, 5 * 60_000);
 	}
 
 	private async handleMcpRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -262,6 +278,11 @@ export class ObsidianMcpServer {
 	}
 
 	async stop(): Promise<void> {
+		if (this.cleanupInterval) {
+			clearInterval(this.cleanupInterval);
+			this.cleanupInterval = null;
+		}
+
 		if (this.httpServer) {
 			await new Promise<void>((resolve) => {
 				this.httpServer!.close(() => resolve());
