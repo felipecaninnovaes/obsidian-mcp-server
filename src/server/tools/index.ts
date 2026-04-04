@@ -175,63 +175,119 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 	server.registerTool(
 		"search_vault",
 		{
-			description: "Busca por texto em todas as notas do vault.",
+			description:
+				"Busca por texto em todas as notas do vault. " +
+				"Modo 'phrase' (padrão): substring exata. " +
+				"Modo 'tokens': todos os termos devem aparecer na nota, em qualquer ordem (útil quando a frase exata não é conhecida).",
 			inputSchema: {
 				query: z.string().min(1).max(MAX_QUERY_LENGTH),
 				case_sensitive: z.boolean().optional().default(false),
+				mode: z
+					.enum(["phrase", "tokens"])
+					.optional()
+					.default("phrase")
+					.describe(
+						"'phrase': busca substring exata (default). " +
+						"'tokens': busca notas que contenham TODOS os termos da query, em qualquer ordem."
+					),
 			},
 		},
-		async ({ query, case_sensitive }) => {
-			const searchFor = case_sensitive ? query : query.toLowerCase();
-
-			// Use inverted index to pre-filter candidate files (only for case-insensitive queries)
-			const candidates = case_sensitive
-				? null
-				: await vaultIndex.getCandidates(query, app.vault);
-
+		async ({ query, case_sensitive, mode }) => {
 			const allFiles = app.vault.getMarkdownFiles();
-			// If candidates is null (index not ready or no tokens), search all files
-			const filesToSearch =
-				candidates === null
-					? allFiles
-					: allFiles.filter((f) => candidates.has(f.path));
-
-			const results: { path: string; matches: number; excerpt: string }[] = [];
+			const results: { path: string; matches: number; excerpt: string; match_type: string }[] = [];
 			const BATCH_SIZE = 50;
 
-			for (let i = 0; i < filesToSearch.length; i += BATCH_SIZE) {
-				const batch = filesToSearch.slice(i, i + BATCH_SIZE);
-				const items = await Promise.all(
-					batch.map(async (file) => ({ file, content: await app.vault.cachedRead(file) }))
-				);
+			if (mode === "tokens") {
+				// Token mode: use VaultIndex to find files containing all query tokens
+				const candidates = await vaultIndex.getCandidates(query, app.vault);
+				const filesToSearch =
+					candidates === null
+						? allFiles
+						: allFiles.filter((f) => candidates.has(f.path));
 
-				for (const { file, content } of items) {
-					const searchIn = case_sensitive ? content : content.toLowerCase();
-					if (!searchIn.includes(searchFor)) continue;
-					const idx = searchIn.indexOf(searchFor);
-					const excerpt =
-						"..." +
-						content
-							.slice(Math.max(0, idx - 100), idx + query.length + 100)
-							.replace(/\n/g, " ") +
-						"...";
-					// Count matches with indexOf loop to avoid ReDoS
-					let matchCount = 0;
-					let pos = 0;
-					while ((pos = searchIn.indexOf(searchFor, pos)) !== -1) {
-						matchCount++;
-						pos += searchFor.length;
+				for (let i = 0; i < filesToSearch.length; i += BATCH_SIZE) {
+					const batch = filesToSearch.slice(i, i + BATCH_SIZE);
+					const items = await Promise.all(
+						batch.map(async (file) => ({ file, content: await app.vault.cachedRead(file) }))
+					);
+					for (const { file, content } of items) {
+						// Build a short excerpt showing the first token match
+						const firstToken = query.split(/\s+/).find((t) => t.length >= 2) ?? query;
+						const searchIn = case_sensitive ? content : content.toLowerCase();
+						const idx = searchIn.indexOf(case_sensitive ? firstToken : firstToken.toLowerCase());
+						const excerpt =
+							idx !== -1
+								? "..." + content.slice(Math.max(0, idx - 80), idx + firstToken.length + 80).replace(/\n/g, " ") + "..."
+								: content.slice(0, 160).replace(/\n/g, " ");
+						results.push({ path: file.path, matches: 1, excerpt, match_type: "tokens" });
 					}
-					results.push({ path: file.path, matches: matchCount, excerpt });
+				}
+			} else {
+				// Phrase mode: exact substring search, with automatic token fallback if zero results
+				const searchFor = case_sensitive ? query : query.toLowerCase();
+
+				// Pre-filter with VaultIndex for case-insensitive queries
+				const candidates = case_sensitive
+					? null
+					: await vaultIndex.getCandidates(query, app.vault);
+
+				const filesToSearch =
+					candidates === null
+						? allFiles
+						: allFiles.filter((f) => candidates.has(f.path));
+
+				for (let i = 0; i < filesToSearch.length; i += BATCH_SIZE) {
+					const batch = filesToSearch.slice(i, i + BATCH_SIZE);
+					const items = await Promise.all(
+						batch.map(async (file) => ({ file, content: await app.vault.cachedRead(file) }))
+					);
+					for (const { file, content } of items) {
+						const searchIn = case_sensitive ? content : content.toLowerCase();
+						if (!searchIn.includes(searchFor)) continue;
+						const idx = searchIn.indexOf(searchFor);
+						const excerpt =
+							"..." +
+							content.slice(Math.max(0, idx - 100), idx + query.length + 100).replace(/\n/g, " ") +
+							"...";
+						let matchCount = 0;
+						let pos = 0;
+						while ((pos = searchIn.indexOf(searchFor, pos)) !== -1) { matchCount++; pos += searchFor.length; }
+						results.push({ path: file.path, matches: matchCount, excerpt, match_type: "phrase" });
+					}
+				}
+
+				// Auto-fallback to token search when phrase finds nothing
+				if (results.length === 0) {
+					const tokenCandidates = await vaultIndex.getCandidates(query, app.vault);
+					if (tokenCandidates && tokenCandidates.size > 0) {
+						const tokenFiles = allFiles.filter((f) => tokenCandidates.has(f.path));
+						for (let i = 0; i < tokenFiles.length; i += BATCH_SIZE) {
+							const batch = tokenFiles.slice(i, i + BATCH_SIZE);
+							const items = await Promise.all(
+								batch.map(async (file) => ({ file, content: await app.vault.cachedRead(file) }))
+							);
+							for (const { file, content } of items) {
+								const firstToken = query.split(/\s+/).find((t) => t.length >= 2) ?? query;
+								const searchIn = case_sensitive ? content : content.toLowerCase();
+								const idx = searchIn.indexOf(case_sensitive ? firstToken : firstToken.toLowerCase());
+								const excerpt =
+									idx !== -1
+										? "..." + content.slice(Math.max(0, idx - 80), idx + firstToken.length + 80).replace(/\n/g, " ") + "..."
+										: content.slice(0, 160).replace(/\n/g, " ");
+								results.push({ path: file.path, matches: 1, excerpt, match_type: "tokens_fallback" });
+							}
+						}
+					}
 				}
 			}
+
 			results.sort((a, b) => b.matches - a.matches);
 			return {
 				content: [
 					{
 						type: "text",
 						text: JSON.stringify(
-							{ query, total_files_matched: results.length, results: results.slice(0, 20) },
+							{ query, mode, total_files_matched: results.length, results: results.slice(0, 20) },
 							null,
 							2
 						),
