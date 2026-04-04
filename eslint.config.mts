@@ -24,6 +24,12 @@ export default tseslint.config(
 		},
 	},
 	...obsidianmd.configs.recommended,
+	{
+		rules: {
+			// Allow console.info in addition to the obsidianmd default (warn, error, debug)
+			"no-console": ["error", { allow: ["warn", "error", "debug", "info"] }],
+		},
+	},
 	globalIgnores([
 		"node_modules",
 		"dist",

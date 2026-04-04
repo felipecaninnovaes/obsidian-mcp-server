@@ -3,8 +3,12 @@
  * Extracted to a separate module for testability.
  */
 
-export const MAX_AUTH_FAILURES = 10;
-export const WINDOW_MS = 60_000; // 1 minute
+import { MAX_AUTH_FAILURES, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_CLEANUP_MS } from "../constants";
+
+// Re-export constants that tests import directly from this module.
+export { MAX_AUTH_FAILURES };
+export const WINDOW_MS = RATE_LIMIT_WINDOW_MS;
+export const CLEANUP_MS = RATE_LIMIT_CLEANUP_MS;
 
 const authFailures = new Map<string, { count: number; resetAt: number }>();
 
@@ -19,7 +23,7 @@ export function recordAuthFailure(ip: string): void {
 	const now = Date.now();
 	const entry = authFailures.get(ip);
 	if (!entry || now > entry.resetAt) {
-		authFailures.set(ip, { count: 1, resetAt: now + WINDOW_MS });
+		authFailures.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
 	} else {
 		entry.count++;
 	}

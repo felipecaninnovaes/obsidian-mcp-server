@@ -43,7 +43,11 @@
       "Bash(awk NR>=594 && NR<=604:*)",
       "Bash(awk NR>=632 && NR<=642:*)",
       "mcp__obsidian__get_graph_neighbors",
-      "mcp__obsidian__suggest_links"
+      "mcp__obsidian__suggest_links",
+      "Bash(ls:*)",
+      "Bash(wc -l /var/home/felipecn/DEV/obsidian-mcp-server/src/**/*.ts)",
+      "Bash(grep -n \"^[[:space:]]*\\\\/\\\\/\" /var/home/felipecn/DEV/obsidian-mcp-server/src/**/*.ts)",
+      "Bash(grep -n \"^[[:space:]]*\\\\/\\\\*\" /var/home/felipecn/DEV/obsidian-mcp-server/src/**/*.ts)"
     ]
   }
 }

@@ -9,8 +9,7 @@ import { isRateLimited, recordAuthFailure, cleanupExpiredEntries } from "./rateL
 import { logger } from "../logger";
 import * as http from "http";
 import { randomBytes, timingSafeEqual } from "crypto";
-
-const MAX_BODY_SIZE = 11 * 1024 * 1024; // 11 MB
+import { MAX_SESSIONS, MAX_BODY_SIZE, VAULT_DEBOUNCE_MS } from "../constants";
 
 interface StreamableSession {
 	server: McpServer;
@@ -26,7 +25,6 @@ interface SseSession {
 }
 
 export class ObsidianMcpServer {
-	private static readonly MAX_SESSIONS = 10;
 
 	private app: App;
 	private settings: McpServerSettings;
@@ -53,7 +51,7 @@ export class ObsidianMcpServer {
 			if (timer) clearTimeout(timer);
 			timer = setTimeout(() => {
 				server.sendResourceListChanged();
-			}, 500);
+			}, VAULT_DEBOUNCE_MS);
 		};
 		const refModify = this.app.vault.on("modify", notify);
 		const refCreate = this.app.vault.on("create", notify);
@@ -216,7 +214,7 @@ export class ObsidianMcpServer {
 			return;
 		}
 
-		if (this.sessions.size >= ObsidianMcpServer.MAX_SESSIONS) {
+		if (this.sessions.size >= MAX_SESSIONS) {
 			res.writeHead(503, { "Content-Type": "application/json" });
 			res.end(JSON.stringify({ error: "Too many active sessions" }));
 			return;
@@ -252,7 +250,7 @@ export class ObsidianMcpServer {
 	}
 
 	private async handleSseConnect(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-		if (this.sseSessions.size >= ObsidianMcpServer.MAX_SESSIONS) {
+		if (this.sseSessions.size >= MAX_SESSIONS) {
 			res.writeHead(503, { "Content-Type": "application/json" });
 			res.end(JSON.stringify({ error: "Too many active sessions" }));
 			return;

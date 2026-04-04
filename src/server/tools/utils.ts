@@ -2,14 +2,17 @@
  * Pure utility functions — no Obsidian dependency, fully testable.
  */
 
-export const MAX_PATH_LENGTH = 512;
+import { MAX_PATH_LENGTH as _MAX_PATH_LENGTH } from "../../constants";
+
+// Re-export so existing imports from this file continue to work.
+export { MAX_PATH_LENGTH } from "../../constants";
 
 /**
  * Validates and normalizes a vault-relative path.
  * Rejects absolute paths, path traversal sequences, and paths that are too long.
  */
 export function sanitizePath(path: string): string {
-	if (path.length > MAX_PATH_LENGTH) {
+	if (path.length > _MAX_PATH_LENGTH) {
 		throw new Error("Path too long (max 512 characters)");
 	}
 	// Reject absolute paths and any traversal attempts

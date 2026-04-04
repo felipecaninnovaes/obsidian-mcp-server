@@ -1,4 +1,6 @@
 import { TAbstractFile, TFile, Vault } from "obsidian";
+import { extractTokens } from "./textUtils";
+import { BATCH_SIZE } from "../constants";
 
 /**
  * Token-based inverted index for full-text search pre-filtering.
@@ -51,9 +53,8 @@ export class VaultIndex {
 	private async build(vault: Vault): Promise<void> {
 		this.tokenIndex.clear();
 		const files = vault.getMarkdownFiles();
-		const BATCH = 50;
-		for (let i = 0; i < files.length; i += BATCH) {
-			const batch = files.slice(i, i + BATCH);
+		for (let i = 0; i < files.length; i += BATCH_SIZE) {
+			const batch = files.slice(i, i + BATCH_SIZE);
 			const items = await Promise.all(
 				batch.map(async (f) => ({ path: f.path, content: await vault.cachedRead(f) }))
 			);
@@ -102,11 +103,3 @@ export class VaultIndex {
 	}
 }
 
-/** Splits text into lowercase tokens of 2+ characters, deduplicates. */
-function extractTokens(text: string): string[] {
-	const tokens = new Set<string>();
-	for (const word of text.split(/[\s\p{P}]+/u)) {
-		if (word.length >= 2) tokens.add(word);
-	}
-	return Array.from(tokens);
-}
