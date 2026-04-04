@@ -1,6 +1,7 @@
 import { App, TFile, TFolder, moment } from "obsidian";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { expandTemplate } from "./templateUtils";
 
 export function registerDailyNoteTools(server: McpServer, app: App): void {
 	registerGetDailyNote(server, app);
@@ -96,7 +97,11 @@ function registerGetDailyNote(server: McpServer, app: App): void {
 				}
 			}
 
-			await app.vault.create(notePath, noteContent);
+			// Expand template variables
+			const title = targetDate.format(fmt).replace(/\.md$/i, "");
+			const expandedContent = expandTemplate(noteContent, { title });
+
+			await app.vault.create(notePath, expandedContent);
 			return {
 				content: [
 					{

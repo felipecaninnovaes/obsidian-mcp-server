@@ -6,6 +6,7 @@ import { resolveNoteFile } from "./noteUtils";
 import { logger } from "../../logger";
 import { MAX_CONTENT_LENGTH } from "../../constants";
 import { summarizeParams } from "../AuditLog";
+import { expandTemplate } from "./templateUtils";
 import type { ToolDependencies } from "./index";
 
 export function registerFileTools(server: McpServer, app: App, deps: ToolDependencies): void {
@@ -18,6 +19,8 @@ export function registerFileTools(server: McpServer, app: App, deps: ToolDepende
 	registerRenameNote(server, app, permissions, auditLog, sessionId);
 	registerEditNote(server, app, permissions, auditLog, sessionId);
 	registerCreateFolder(server, app, permissions, auditLog, sessionId);
+	registerBulkCreateNotes(server, app, permissions, auditLog, sessionId);
+	registerBulkMoveNotes(server, app, permissions, auditLog, sessionId);
 }
 
 function registerListFiles(server: McpServer, app: App): void {
@@ -98,7 +101,11 @@ function registerCreateNote(
 			assertWritePermission(permissions);
 			const safePath = sanitizePath(path);
 			if (app.vault.getAbstractFileByPath(safePath)) throw new Error("Arquivo já existe");
-			await app.vault.create(safePath, content);
+			// Extract title from path (filename without .md extension)
+			const title = safePath.split("/").pop()?.replace(/\.md$/i, "") || "";
+			// Expand template variables in content
+			const expandedContent = expandTemplate(content, { title });
+			await app.vault.create(safePath, expandedContent);
 			auditLog.record({ timestamp: Date.now(), sessionId, tool: "create_note", params_summary: summarizeParams({ path: safePath }), result: "ok" });
 			return { content: [{ type: "text", text: `Nota criada: ${safePath}` }] };
 		}
@@ -307,6 +314,181 @@ function registerCreateFolder(
 			await app.vault.createFolder(safePath);
 			auditLog.record({ timestamp: Date.now(), sessionId, tool: "create_folder", params_summary: summarizeParams({ path: safePath }), result: "ok" });
 			return { content: [{ type: "text", text: `Pasta criada: ${safePath}` }] };
+		}
+	);
+}
+
+function registerBulkCreateNotes(
+	server: McpServer, app: App,
+	permissions: ToolDependencies["permissions"],
+	auditLog: ToolDependencies["auditLog"],
+	sessionId: string
+): void {
+	server.registerTool(
+		"bulk_create_notes",
+		{
+			description: "Cria múltiplas notas no vault em uma única operação. Máximo 50 notas por chamada.",
+			inputSchema: {
+				notes: z
+					.array(
+						z.object({
+							path: z.string().max(MAX_PATH_LENGTH),
+							content: z.string().max(MAX_CONTENT_LENGTH),
+						})
+					)
+					.min(1)
+					.max(50)
+					.describe("Array de notas a criar, cada uma com path e content"),
+			},
+		},
+		async ({ notes }) => {
+			assertWritePermission(permissions);
+			const results: Array<{ path: string; success: boolean; error?: string }> = [];
+
+			for (const note of notes) {
+				try {
+					const safePath = sanitizePath(note.path);
+					if (app.vault.getAbstractFileByPath(safePath)) {
+						results.push({
+							path: safePath,
+							success: false,
+							error: "Arquivo já existe",
+						});
+						continue;
+					}
+					// Expand template variables in content
+					const title = safePath.split("/").pop()?.replace(/\.md$/i, "") || "";
+					const expandedContent = expandTemplate(note.content, { title });
+					await app.vault.create(safePath, expandedContent);
+					results.push({ path: safePath, success: true });
+				} catch (err) {
+					results.push({
+						path: note.path,
+						success: false,
+						error: err instanceof Error ? err.message : "Erro desconhecido",
+					});
+				}
+			}
+
+			auditLog.record({
+				timestamp: Date.now(),
+				sessionId,
+				tool: "bulk_create_notes",
+				params_summary: summarizeParams({ count: notes.length }),
+				result: "ok",
+			});
+
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify(
+							{
+								total: notes.length,
+								successful: results.filter((r) => r.success).length,
+								failed: results.filter((r) => !r.success).length,
+								results,
+							},
+							null,
+							2
+						),
+					},
+				],
+			};
+		}
+	);
+}
+
+function registerBulkMoveNotes(
+	server: McpServer, app: App,
+	permissions: ToolDependencies["permissions"],
+	auditLog: ToolDependencies["auditLog"],
+	sessionId: string
+): void {
+	server.registerTool(
+		"bulk_move_notes",
+		{
+			description: "Move múltiplas notas no vault em uma única operação. Máximo 50 notas por chamada.",
+			inputSchema: {
+				moves: z
+					.array(
+						z.object({
+							from: z.string().max(MAX_PATH_LENGTH),
+							to: z.string().max(MAX_PATH_LENGTH),
+						})
+					)
+					.min(1)
+					.max(50)
+					.describe("Array de movimentações, cada uma com from e to"),
+			},
+		},
+		async ({ moves }) => {
+			assertWritePermission(permissions);
+			const results: Array<{ from: string; to: string; success: boolean; error?: string }> = [];
+
+			for (const move of moves) {
+				try {
+					const safeFrom = sanitizePath(move.from);
+					const safeTo = sanitizePath(move.to);
+
+					const file = resolveNoteFile(app, safeFrom);
+					if (!file) {
+						results.push({
+							from: safeFrom,
+							to: safeTo,
+							success: false,
+							error: "Arquivo de origem não encontrado",
+						});
+						continue;
+					}
+
+					if (app.vault.getAbstractFileByPath(safeTo)) {
+						results.push({
+							from: safeFrom,
+							to: safeTo,
+							success: false,
+							error: "Arquivo de destino já existe",
+						});
+						continue;
+					}
+
+					await app.vault.rename(file, safeTo);
+					results.push({ from: safeFrom, to: safeTo, success: true });
+				} catch (err) {
+					results.push({
+						from: move.from,
+						to: move.to,
+						success: false,
+						error: err instanceof Error ? err.message : "Erro desconhecido",
+					});
+				}
+			}
+
+			auditLog.record({
+				timestamp: Date.now(),
+				sessionId,
+				tool: "bulk_move_notes",
+				params_summary: summarizeParams({ count: moves.length }),
+				result: "ok",
+			});
+
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify(
+							{
+								total: moves.length,
+								successful: results.filter((r) => r.success).length,
+								failed: results.filter((r) => !r.success).length,
+								results,
+							},
+							null,
+							2
+						),
+					},
+				],
+			};
 		}
 	);
 }

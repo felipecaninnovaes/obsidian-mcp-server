@@ -10,6 +10,7 @@ import { registerSearchTools } from "./searchTools";
 import { registerMetadataTools } from "./metadataTools";
 import { registerGraphTools } from "./graphTools";
 import { registerDailyNoteTools } from "./dailyNoteTools";
+import { registerCanvasTools } from "./canvasTools";
 import { registerVaultResources } from "./resources";
 
 /** All cross-cutting dependencies threaded into tool handlers. */
@@ -29,5 +30,6 @@ export function registerTools(server: McpServer, app: App, deps: ToolDependencie
 	registerMetadataTools(server, app, deps);
 	registerGraphTools(server, app, deps.vaultIndex, deps.backlinkIndex);
 	registerDailyNoteTools(server, app);
+	registerCanvasTools(server, app, deps);
 	registerVaultResources(server, app);
 }
