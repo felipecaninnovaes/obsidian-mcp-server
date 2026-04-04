@@ -407,16 +407,22 @@ interface DailyNotesOptions {
 	template?: string;
 }
 
+// Typed interfaces for accessing undocumented Obsidian internal plugin APIs
+interface DailyNotesPlugin {
+	enabled: boolean;
+	instance?: { options?: DailyNotesOptions };
+}
+interface AppInternals {
+	internalPlugins?: { getPluginById(id: string): DailyNotesPlugin | undefined };
+	plugins?: { getPlugin(id: string): { settings?: { daily?: DailyNotesOptions } } | null };
+}
+
 function getDailyNotesConfig(app: App): DailyNotesOptions {
-	// Try built-in Daily Notes plugin first
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const internal = (app as any).internalPlugins?.getPluginById?.("daily-notes");
+	const appEx = app as unknown as AppInternals;
+	const internal = appEx.internalPlugins?.getPluginById("daily-notes");
 	if (internal?.enabled) return internal.instance?.options ?? {};
-	// Fall back to community Periodic Notes plugin
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const periodic = (app as any).plugins?.getPlugin?.("periodic-notes");
-	if (periodic?.settings?.daily) return periodic.settings.daily;
-	return {};
+	const periodic = appEx.plugins?.getPlugin("periodic-notes");
+	return periodic?.settings?.daily ?? {};
 }
 
 function registerGetDailyNote(server: McpServer, app: App): void {
@@ -558,7 +564,7 @@ function registerQueryVault(server: McpServer, app: App): void {
 				// Collect all tags (inline + frontmatter)
 				const fileTags = new Set<string>();
 				for (const { tag } of cache?.tags ?? []) fileTags.add(tag);
-				const fmTags = cache?.frontmatter?.["tags"];
+				const fmTags: unknown = cache?.frontmatter?.["tags"];
 				if (Array.isArray(fmTags)) {
 					for (const t of fmTags) {
 						if (typeof t === "string") fileTags.add(t.startsWith("#") ? t : `#${t}`);
@@ -589,8 +595,9 @@ function registerQueryVault(server: McpServer, app: App): void {
 				// Build safe frontmatter (strip Obsidian internal 'position' key)
 				let frontmatter: Record<string, unknown> | null = null;
 				if (cache?.frontmatter) {
-					const { position: _, ...rest } = cache.frontmatter;
-					frontmatter = rest;
+					frontmatter = Object.fromEntries(
+						Object.entries(cache.frontmatter).filter(([k]) => k !== "position")
+					);
 				}
 
 				results.push({ path: file.path, tags: Array.from(fileTags), frontmatter });
@@ -627,8 +634,9 @@ function registerGetNoteMetadata(server: McpServer, app: App): void {
 			let metadata: Record<string, unknown> | null = null;
 			if (frontmatter) {
 				// Exclude Obsidian's internal 'position' key from the result
-				const { position: _, ...rest } = frontmatter;
-				metadata = rest;
+				metadata = Object.fromEntries(
+					Object.entries(frontmatter).filter(([k]) => k !== "position")
+				);
 			}
 			return {
 				content: [{ type: "text", text: JSON.stringify({ path: safePath, frontmatter: metadata }, null, 2) }],
@@ -652,7 +660,7 @@ function registerListTags(server: McpServer, app: App): void {
 					tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
 				}
 				// Frontmatter tags (e.g. tags: [foo, bar])
-				const fmTags = cache?.frontmatter?.["tags"];
+				const fmTags: unknown = cache?.frontmatter?.["tags"];
 				if (Array.isArray(fmTags)) {
 					for (const t of fmTags) {
 						if (typeof t === "string") {

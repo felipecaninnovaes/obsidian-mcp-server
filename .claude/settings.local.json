@@ -29,7 +29,19 @@
       "mcp__obsidian__get_daily_note",
       "mcp__obsidian__edit_note",
       "Bash(node -e \"require\\('./node_modules/vitest/package.json'\\)\")",
-      "Bash(npm test:*)"
+      "Bash(npm test:*)",
+      "Bash(npm ls:*)",
+      "Bash(grep -E \"^/|^$\")",
+      "Bash(awk NR>=555 && NR<=570:*)",
+      "Bash(awk NR>=648 && NR<=660:*)",
+      "Bash(awk 'NR>=585 && NR<=598' /var/home/felipecn/DEV/obsidian-mcp-server/src/server/tools/index.ts)",
+      "Bash(awk 'NR>=625 && NR<=635' /var/home/felipecn/DEV/obsidian-mcp-server/src/server/tools/index.ts)",
+      "Bash(awk 'NR>=594 && NR<=602' /var/home/felipecn/DEV/obsidian-mcp-server/src/server/tools/index.ts)",
+      "Bash(awk 'NR>=632 && NR<=640' /var/home/felipecn/DEV/obsidian-mcp-server/src/server/tools/index.ts)",
+      "Bash(awk NR==20 || NR==21 || NR==22:*)",
+      "Bash(awk NR==74:*)",
+      "Bash(awk NR>=594 && NR<=604:*)",
+      "Bash(awk NR>=632 && NR<=642:*)"
     ]
   }
 }

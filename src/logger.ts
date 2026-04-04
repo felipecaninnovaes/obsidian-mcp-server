@@ -15,7 +15,7 @@ class Logger {
 	}
 
 	info(...args: unknown[]): void {
-		if (LEVELS[this.level] <= 1) console.log(PREFIX, ...args);
+		if (LEVELS[this.level] <= 1) console.debug(PREFIX, ...args);
 	}
 
 	warn(...args: unknown[]): void {

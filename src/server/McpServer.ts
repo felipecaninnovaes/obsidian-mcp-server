@@ -18,6 +18,7 @@ interface StreamableSession {
 
 interface SseSession {
 	server: McpServer;
+	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	transport: SSEServerTransport;
 }
 
@@ -59,6 +60,7 @@ export class ObsidianMcpServer {
 			);
 		}
 
+		// eslint-disable-next-line @typescript-eslint/no-misused-promises
 		this.httpServer = http.createServer(async (req, res) => {
 			// Restrict CORS to localhost origins only
 			const origin = req.headers["origin"];
@@ -224,6 +226,7 @@ export class ObsidianMcpServer {
 			return;
 		}
 
+		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		const transport = new SSEServerTransport("/messages", res);
 		const server = new McpServer({ name: "obsidian-mcp-server", version: "1.0.0" });
 		registerTools(server, this.app);

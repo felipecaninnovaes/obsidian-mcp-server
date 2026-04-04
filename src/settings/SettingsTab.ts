@@ -13,10 +13,12 @@ export class McpSettingsTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		// eslint-disable-next-line obsidianmd/settings-tab/no-manual-html-headings, obsidianmd/ui/sentence-case
 		containerEl.createEl("h2", { text: "MCP Server Settings" });
 
 		new Setting(containerEl)
 			.setName("Port")
+			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setDesc("Port the MCP HTTP server listens on (default: 27123).")
 			.addText((text) =>
 				text
@@ -32,12 +34,15 @@ export class McpSettingsTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setName("API Key")
+			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setDesc("Secret key required by MCP clients to authenticate.")
 			.addText((text) => {
 				text.inputEl.type = "password";
 				text.inputEl.autocomplete = "off";
 				text
+					// eslint-disable-next-line obsidianmd/ui/sentence-case
 					.setPlaceholder("auto-generated")
 					.setValue(this.plugin.settings.apiKey)
 					.onChange(async (value) => {
@@ -47,7 +52,7 @@ export class McpSettingsTab extends PluginSettingTab {
 			})
 			.addButton((btn) =>
 				btn.setButtonText("Copy").onClick(() => {
-					navigator.clipboard.writeText(this.plugin.settings.apiKey);
+					void navigator.clipboard.writeText(this.plugin.settings.apiKey);
 					new Notice("API key copied!");
 				})
 			);
@@ -66,6 +71,7 @@ export class McpSettingsTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Auto-start on load")
+			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setDesc("Start the MCP server automatically when Obsidian opens.")
 			.addToggle((toggle) =>
 				toggle
