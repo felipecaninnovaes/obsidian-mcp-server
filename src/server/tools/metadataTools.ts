@@ -1,4 +1,4 @@
-import { App } from "obsidian";
+import { App, TFolder } from "obsidian";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sanitizePath, MAX_PATH_LENGTH } from "./utils";
@@ -9,6 +9,8 @@ export function registerMetadataTools(server: McpServer, app: App): void {
 	registerListTags(server, app);
 	registerGetNoteLinks(server, app);
 	registerGetBacklinks(server, app);
+	registerUpdateNoteMetadata(server, app);
+	registerGetVaultContext(server, app);
 }
 
 function registerGetNoteMetadata(server: McpServer, app: App): void {
@@ -151,4 +153,204 @@ function registerGetBacklinks(server: McpServer, app: App): void {
 			};
 		}
 	);
+}
+
+// ── update_note_metadata ──────────────────────────────────────────────────────
+
+/** Regex to detect and capture the frontmatter block at the start of a file. */
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
+
+function registerUpdateNoteMetadata(server: McpServer, app: App): void {
+	server.registerTool(
+		"update_note_metadata",
+		{
+			description:
+				"Atualiza o frontmatter YAML de uma nota de forma atômica. " +
+				"Use 'set' para adicionar/atualizar chaves e 'remove' para excluí-las. " +
+				"Cria o bloco frontmatter se não existir e 'set' for fornecido.",
+			inputSchema: {
+				path: z.string().max(MAX_PATH_LENGTH).describe("Caminho da nota (ex: Pasta/Nota.md)"),
+				set: z.record(z.string(), z.unknown()).optional().describe("Chaves a adicionar ou atualizar no frontmatter"),
+				remove: z.array(z.string()).optional().describe("Chaves a remover do frontmatter"),
+			},
+		},
+		async ({ path, set, remove }) => {
+			if (!set && !remove?.length) {
+				throw new Error("Forneça ao menos 'set' ou 'remove'");
+			}
+
+			const safePath = sanitizePath(path);
+			const file = resolveNoteFile(app, safePath);
+			if (!file) throw new Error("Arquivo não encontrado");
+
+			let finalFrontmatter: Record<string, unknown> = {};
+
+			await app.vault.process(file, (content) => {
+				const match = FRONTMATTER_RE.exec(content);
+				const body = match ? content.slice(match[0].length) : content;
+
+				// Parse current frontmatter from Obsidian's cache (already parsed)
+				const cached = app.metadataCache.getFileCache(file)?.frontmatter;
+				const current: Record<string, unknown> = cached
+					? Object.fromEntries(Object.entries(cached).filter(([k]) => k !== "position"))
+					: {};
+
+				// Apply set (merge) and remove (delete) operations
+				const updated = { ...current, ...(set ?? {}) };
+				for (const key of remove ?? []) {
+					delete updated[key];
+				}
+				finalFrontmatter = updated;
+
+				if (Object.keys(updated).length === 0) {
+					// No frontmatter left — strip the block entirely
+					return body;
+				}
+
+				const yamlBlock = `---\n${serializeFrontmatter(updated)}\n---\n`;
+				return yamlBlock + body;
+			});
+
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({ path: safePath, frontmatter: finalFrontmatter }, null, 2),
+					},
+				],
+			};
+		}
+	);
+}
+
+// ── get_vault_context ─────────────────────────────────────────────────────────
+
+function registerGetVaultContext(server: McpServer, app: App): void {
+	server.registerTool(
+		"get_vault_context",
+		{
+			description:
+				"Retorna uma visão geral do vault em uma única chamada: estatísticas, árvore de pastas, " +
+				"top tags, notas recentes e notas mais linkadas.",
+		},
+		async () => {
+			const markdownFiles = app.vault.getMarkdownFiles();
+			const allFiles = app.vault.getAllLoadedFiles();
+
+			// Stats
+			const folders = allFiles.filter((f) => f instanceof TFolder);
+			const tagCounts = collectTagCounts(app);
+			const stats = {
+				total_notes: markdownFiles.length,
+				total_folders: folders.length,
+				total_tags: tagCounts.size,
+			};
+
+			// Folder tree
+			const folderTree = folders
+				.map((f) => f.path + "/")
+				.sort();
+
+			// Top 20 tags by count
+			const topTags = Array.from(tagCounts.entries())
+				.sort((a, b) => b[1] - a[1])
+				.slice(0, 20)
+				.map(([tag, count]) => ({ tag, count }));
+
+			// 20 most recently modified notes
+			const recentNotes = [...markdownFiles]
+				.sort((a, b) => b.stat.mtime - a.stat.mtime)
+				.slice(0, 20)
+				.map((f) => ({ path: f.path, mtime: new Date(f.stat.mtime).toISOString() }));
+
+			// 10 most inbound-linked notes
+			const inboundCount = new Map<string, number>();
+			for (const links of Object.values(app.metadataCache.resolvedLinks)) {
+				for (const targetPath of Object.keys(links)) {
+					inboundCount.set(targetPath, (inboundCount.get(targetPath) ?? 0) + 1);
+				}
+			}
+			const mostLinked = Array.from(inboundCount.entries())
+				.sort((a, b) => b[1] - a[1])
+				.slice(0, 10)
+				.map(([path, inbound_links]) => ({ path, inbound_links }));
+
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify(
+							{ stats, folder_tree: folderTree, top_tags: topTags, recent_notes: recentNotes, most_linked: mostLinked },
+							null,
+							2
+						),
+					},
+				],
+			};
+		}
+	);
+}
+
+// ── Frontmatter utilities (pure, exported for testing) ────────────────────────
+
+/**
+ * Serialize a plain object as YAML frontmatter lines.
+ * Handles strings, numbers, booleans, null, and arrays of primitives.
+ * Nested objects are serialized as JSON strings.
+ */
+export function serializeFrontmatter(obj: Record<string, unknown>): string {
+	return Object.entries(obj)
+		.map(([key, value]) => serializeKV(key, value))
+		.join("\n");
+}
+
+function serializeKV(key: string, value: unknown): string {
+	if (Array.isArray(value)) {
+		if (value.length === 0) return `${key}: []`;
+		const items = value.map((v) => `  - ${serializePrimitive(v)}`).join("\n");
+		return `${key}:\n${items}`;
+	}
+	return `${key}: ${serializePrimitive(value)}`;
+}
+
+function serializePrimitive(value: unknown): string {
+	if (value === null || value === undefined) return "null";
+	if (typeof value === "boolean") return String(value);
+	if (typeof value === "number") return String(value);
+	if (typeof value === "object") return JSON.stringify(value);
+	const str = String(value);
+	return needsYamlQuoting(str) ? JSON.stringify(str) : str;
+}
+
+function needsYamlQuoting(s: string): boolean {
+	if (s.length === 0) return true;
+	if (/^\s|\s$/.test(s)) return true;
+	if (/[:#\[\]{}&*!|>'"%@`,]/.test(s)) return true;
+	if (/\n/.test(s)) return true;
+	if (["true", "false", "null", "yes", "no", "on", "off"].includes(s.toLowerCase())) return true;
+	// Strings that look like numbers should be quoted to preserve them as strings
+	if (s !== "" && !isNaN(Number(s))) return true;
+	return false;
+}
+
+// ── Tag counting helper ───────────────────────────────────────────────────────
+
+function collectTagCounts(app: App): Map<string, number> {
+	const tagCounts = new Map<string, number>();
+	for (const file of app.vault.getMarkdownFiles()) {
+		const cache = app.metadataCache.getFileCache(file);
+		for (const { tag } of cache?.tags ?? []) {
+			tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+		}
+		const fmTags: unknown = cache?.frontmatter?.["tags"];
+		if (Array.isArray(fmTags)) {
+			for (const t of fmTags) {
+				if (typeof t === "string") {
+					const normalized = t.startsWith("#") ? t : `#${t}`;
+					tagCounts.set(normalized, (tagCounts.get(normalized) ?? 0) + 1);
+				}
+			}
+		}
+	}
+	return tagCounts;
 }

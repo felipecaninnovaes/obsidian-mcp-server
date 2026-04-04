@@ -4,11 +4,13 @@ import { DEFAULT_SETTINGS, McpServerSettings } from "./types";
 import { ObsidianMcpServer } from "./server/McpServer";
 import { McpSettingsTab } from "./settings/SettingsTab";
 import { VaultIndex } from "./server/VaultIndex";
+import { BacklinkIndex } from "./server/BacklinkIndex";
 
 export default class McpServerPlugin extends Plugin {
 	settings: McpServerSettings;
 	mcpServer: ObsidianMcpServer | null = null;
 	readonly vaultIndex = new VaultIndex();
+	readonly backlinkIndex = new BacklinkIndex();
 
 	async onload() {
 		await this.loadSettings();
@@ -22,23 +24,35 @@ export default class McpServerPlugin extends Plugin {
 
 		// Keep VaultIndex in sync with vault changes
 		this.registerEvent(
-			this.app.vault.on("modify", (file) => void this.vaultIndex.update(file, this.app.vault))
+			this.app.vault.on("modify", (file) => {
+				void this.vaultIndex.update(file, this.app.vault);
+				this.backlinkIndex.update(file.path, this.app);
+			})
 		);
 		this.registerEvent(
-			this.app.vault.on("create", (file) => void this.vaultIndex.update(file, this.app.vault))
+			this.app.vault.on("create", (file) => {
+				void this.vaultIndex.update(file, this.app.vault);
+				this.backlinkIndex.update(file.path, this.app);
+			})
 		);
 		this.registerEvent(
-			this.app.vault.on("delete", (file) => this.vaultIndex.removeFile(file.path))
+			this.app.vault.on("delete", (file) => {
+				this.vaultIndex.removeFile(file.path);
+				this.backlinkIndex.removeFile(file.path);
+			})
 		);
 		this.registerEvent(
 			this.app.vault.on("rename", (file, oldPath) => {
 				this.vaultIndex.removeFile(oldPath);
 				void this.vaultIndex.update(file, this.app.vault);
+				this.backlinkIndex.removeFile(oldPath);
+				this.backlinkIndex.update(file.path, this.app);
 			})
 		);
 
-		// Warm up the index in the background so the first search is fast
+		// Warm up indexes in the background so the first search is fast
 		this.vaultIndex.buildInBackground(this.app.vault);
+		this.backlinkIndex.build(this.app);
 
 		// eslint-disable-next-line obsidianmd/ui/sentence-case
 		this.addRibbonIcon("plug", "MCP Server", () => {
@@ -85,7 +99,7 @@ export default class McpServerPlugin extends Plugin {
 
 	async startServer() {
 		if (this.mcpServer?.isRunning()) return;
-		this.mcpServer = new ObsidianMcpServer(this.app, this.settings, this.vaultIndex);
+		this.mcpServer = new ObsidianMcpServer(this.app, this.settings, this.vaultIndex, this.backlinkIndex);
 
 		// Exponential backoff: 1 s → 2 s → 4 s (max 3 attempts)
 		const maxAttempts = 3;

@@ -3,13 +3,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sanitizePath, MAX_PATH_LENGTH } from "./utils";
 import { resolveNoteFile } from "./noteUtils";
+import { VaultIndex } from "../VaultIndex";
+import { BacklinkIndex } from "../BacklinkIndex";
 
-export function registerGraphTools(server: McpServer, app: App): void {
-	registerGetGraphNeighbors(server, app);
-	registerSuggestLinks(server, app);
+export function registerGraphTools(server: McpServer, app: App, vaultIndex: VaultIndex, backlinkIndex: BacklinkIndex): void {
+	registerGetGraphNeighbors(server, app, backlinkIndex);
+	registerSuggestLinks(server, app, vaultIndex, backlinkIndex);
 }
 
-function registerGetGraphNeighbors(server: McpServer, app: App): void {
+function registerGetGraphNeighbors(server: McpServer, app: App, backlinkIndex: BacklinkIndex): void {
 	server.registerTool(
 		"get_graph_neighbors",
 		{
@@ -40,18 +42,6 @@ function registerGetGraphNeighbors(server: McpServer, app: App): void {
 
 			const resolvedLinks = app.metadataCache.resolvedLinks;
 
-			// Build reverse index (incoming links) if needed
-			const incomingLinks = new Map<string, Set<string>>();
-			if (direction !== "outgoing") {
-				for (const [src, targets] of Object.entries(resolvedLinks)) {
-					for (const dest of Object.keys(targets)) {
-						let set = incomingLinks.get(dest);
-						if (!set) { set = new Set(); incomingLinks.set(dest, set); }
-						set.add(src);
-					}
-				}
-			}
-
 			const nodes = new Set<string>();
 			const edges: [string, string][] = [];
 			const queue: { path: string; d: number }[] = [{ path: safePath, d: 0 }];
@@ -66,7 +56,8 @@ function registerGetGraphNeighbors(server: McpServer, app: App): void {
 					for (const dest of Object.keys(resolvedLinks[item.path] ?? {})) neighbors.add(dest);
 				}
 				if (direction !== "outgoing") {
-					for (const src of incomingLinks.get(item.path) ?? []) neighbors.add(src);
+					// Use BacklinkIndex for O(1) reverse lookup instead of O(n) scan
+					for (const src of backlinkIndex.getBacklinks(item.path)) neighbors.add(src);
 				}
 
 				for (const neighbor of neighbors) {
@@ -103,13 +94,14 @@ function registerGetGraphNeighbors(server: McpServer, app: App): void {
 	);
 }
 
-function registerSuggestLinks(server: McpServer, app: App): void {
+function registerSuggestLinks(server: McpServer, app: App, vaultIndex: VaultIndex, backlinkIndex: BacklinkIndex): void {
 	server.registerTool(
 		"suggest_links",
 		{
 			description:
 				"Sugere notas existentes que poderiam ser linkadas a partir do conteúdo de uma nota, " +
-				"comparando títulos e aliases contra o texto sem [[links]] já existentes.",
+				"comparando títulos e aliases contra o texto sem [[links]] já existentes. " +
+				"Pontua matches em headings acima de matches no corpo.",
 			inputSchema: {
 				path: z.string().max(MAX_PATH_LENGTH).describe("Caminho da nota a analisar (ex: Pasta/Nota.md)"),
 				limit: z
@@ -132,18 +124,26 @@ function registerSuggestLinks(server: McpServer, app: App): void {
 			// Strip existing [[...]] links so we don't re-suggest what's already linked
 			const strippedContent = rawContent.replace(/\[\[[^\]]*\]\]/g, "");
 
+			// Already-linked paths via resolved links — skip these in suggestions
+			const alreadyLinked = backlinkIndex.getOutgoing(safePath);
+
 			// Collect all candidate titles and aliases from the vault
-			interface Candidate { notePath: string; term: string }
+			// Use VaultIndex as pre-filter: only include candidates whose title tokens
+			// appear in the note's content (avoids scoring O(vault_size) candidates)
+			interface Candidate { notePath: string; term: string; isAlias: boolean }
 			const candidates: Candidate[] = [];
 			for (const note of app.vault.getMarkdownFiles()) {
 				if (note.path === safePath) continue;
-				candidates.push({ notePath: note.path, term: note.basename });
+				// Skip notes that are already explicitly linked
+				if (alreadyLinked.has(note.path)) continue;
+
+				candidates.push({ notePath: note.path, term: note.basename, isAlias: false });
 				const cache = app.metadataCache.getFileCache(note);
 				const aliases: unknown = cache?.frontmatter?.["aliases"];
 				if (Array.isArray(aliases)) {
 					for (const alias of aliases) {
 						if (typeof alias === "string" && alias.length >= 2) {
-							candidates.push({ notePath: note.path, term: alias });
+							candidates.push({ notePath: note.path, term: alias, isAlias: true });
 						}
 					}
 				}
@@ -152,33 +152,57 @@ function registerSuggestLinks(server: McpServer, app: App): void {
 			// Sort by term length descending so longer matches take priority
 			candidates.sort((a, b) => b.term.length - a.term.length);
 
-			const suggestions: { note: string; term: string; excerpt: string }[] = [];
+			// Precompute heading positions for scoring
+			const headingRanges = extractHeadingRanges(rawContent);
+
+			const suggestions: { note: string; term: string; score: number; excerpt: string }[] = [];
 			const suggestedNotes = new Set<string>();
 
 			for (const { notePath, term } of candidates) {
-				if (suggestions.length >= limit) break;
+				if (suggestions.length >= limit * 2) break; // collect more than needed for re-sorting
 				if (suggestedNotes.has(notePath)) continue;
 				if (term.length < 2) continue;
 
 				const idx = strippedContent.toLowerCase().indexOf(term.toLowerCase());
 				if (idx === -1) continue;
 
+				// Score: +2 if match is inside a heading, +1 otherwise
+				const inHeading = headingRanges.some(([start, end]) => idx >= start && idx < end);
+				const score = inHeading ? 2 : 1;
+
 				const excerpt =
 					"..." +
 					rawContent.slice(Math.max(0, idx - 60), idx + term.length + 60).replace(/\n/g, " ") +
 					"...";
-				suggestions.push({ note: notePath, term, excerpt });
+				suggestions.push({ note: notePath, term, score, excerpt });
 				suggestedNotes.add(notePath);
 			}
+
+			// Re-sort by score descending, then trim to limit
+			suggestions.sort((a, b) => b.score - a.score);
+			const trimmed = suggestions.slice(0, limit);
 
 			return {
 				content: [
 					{
 						type: "text",
-						text: JSON.stringify({ path: safePath, total: suggestions.length, suggestions }, null, 2),
+						text: JSON.stringify({ path: safePath, total: trimmed.length, suggestions: trimmed }, null, 2),
 					},
 				],
 			};
 		}
 	);
+}
+
+/** Returns [start, end] character ranges of heading lines (lines starting with #). */
+function extractHeadingRanges(content: string): [number, number][] {
+	const ranges: [number, number][] = [];
+	let pos = 0;
+	for (const line of content.split("\n")) {
+		if (/^#{1,6}\s/.test(line)) {
+			ranges.push([pos, pos + line.length]);
+		}
+		pos += line.length + 1; // +1 for the \n
+	}
+	return ranges;
 }
