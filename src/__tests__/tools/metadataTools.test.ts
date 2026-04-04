@@ -150,7 +150,7 @@ describe("update_note_metadata logic", () => {
 		const result = applyChanges({ title: "Note", extra: "x" }, { extra: undefined });
 		// After spread, extra is undefined — the serializer will use 'null' for it.
 		// The important thing is no TypeError is thrown.
-		expect(() => serializeFrontmatter(result as Record<string, unknown>)).not.toThrow();
+		expect(() => serializeFrontmatter(result)).not.toThrow();
 	});
 
 	// ── FRONTMATTER_RE regex logic ────────────────────────────────────────────

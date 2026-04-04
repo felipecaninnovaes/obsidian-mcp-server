@@ -369,14 +369,16 @@ function serializePrimitive(value: unknown): string {
 	if (typeof value === "boolean") return String(value);
 	if (typeof value === "number") return String(value);
 	if (typeof value === "object") return JSON.stringify(value);
-	const str = String(value);
+	// Only strings are expected in YAML frontmatter; other primitives (bigint, symbol)
+	// fall through to JSON.stringify to avoid unsafe stringification.
+	const str = typeof value === "string" ? value : JSON.stringify(value);
 	return needsYamlQuoting(str) ? JSON.stringify(str) : str;
 }
 
 function needsYamlQuoting(s: string): boolean {
 	if (s.length === 0) return true;
 	if (/^\s|\s$/.test(s)) return true;
-	if (/[:#\[\]{}&*!|>'"%@`,]/.test(s)) return true;
+	if (/[:#[\]{}&*!|>'"%@`,]/.test(s)) return true;
 	if (/\n/.test(s)) return true;
 	if (["true", "false", "null", "yes", "no", "on", "off"].includes(s.toLowerCase())) return true;
 	// Strings that look like numbers should be quoted to preserve them as strings
@@ -410,7 +412,7 @@ function registerGetVaultChanges(server: McpServer, app: App, deleteLog: DeleteL
 
 			const includeAll = !types || types.length === 0;
 			const include = (t: "created" | "modified" | "deleted") =>
-				includeAll || types!.includes(t);
+				includeAll || types?.includes(t) === true;
 
 			type ChangeEntry = { path: string; type: "created" | "modified" | "deleted"; timestamp: string };
 			const changes: ChangeEntry[] = [];

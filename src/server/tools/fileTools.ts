@@ -158,7 +158,7 @@ function registerDeleteNote(
 			const safePath = sanitizePath(path);
 			const file = resolveNoteFile(app, safePath);
 			if (!file) throw new Error("Arquivo não encontrado");
-			await app.vault.delete(file);
+			await app.fileManager.trashFile(file);
 			auditLog.record({ timestamp: Date.now(), sessionId, tool: "delete_note", params_summary: summarizeParams({ path: safePath }), result: "ok" });
 			return { content: [{ type: "text", text: "Arquivo deletado" }] };
 		}
