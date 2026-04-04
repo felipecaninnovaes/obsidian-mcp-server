@@ -1,0 +1,112 @@
+import { TAbstractFile, TFile, Vault } from "obsidian";
+
+/**
+ * Token-based inverted index for full-text search pre-filtering.
+ *
+ * Maps lowercase word tokens → Set of vault-relative paths that contain them.
+ * The index is built lazily on first search and kept up-to-date via vault events
+ * registered in the plugin's onload().
+ *
+ * Usage pattern:
+ *   const candidates = await vaultIndex.getCandidates(query, vault);
+ *   // candidates is a Set of paths whose content likely contains all query tokens.
+ *   // Verify exact phrase match within this smaller candidate set.
+ */
+export class VaultIndex {
+	private readonly tokenIndex = new Map<string, Set<string>>();
+	private built = false;
+
+	isBuilt(): boolean {
+		return this.built;
+	}
+
+	/** Lazily builds the index if not already built, then returns candidate paths. */
+	async getCandidates(query: string, vault: Vault): Promise<Set<string> | null> {
+		await this.ensureBuilt(vault);
+		return this.lookup(query);
+	}
+
+	/** Update a single file in the index (call on vault modify/create events). */
+	async update(file: TAbstractFile, vault: Vault): Promise<void> {
+		if (!(file instanceof TFile) || file.extension !== "md") return;
+		this.removeFile(file.path);
+		const content = await vault.cachedRead(file);
+		this.indexContent(file.path, content);
+	}
+
+	/** Remove a file from the index (call on vault delete/rename events). */
+	removeFile(path: string): void {
+		for (const set of this.tokenIndex.values()) {
+			set.delete(path);
+		}
+	}
+
+	// ── Private ──────────────────────────────────────────────────────────────
+
+	private async ensureBuilt(vault: Vault): Promise<void> {
+		if (this.built) return;
+		await this.build(vault);
+	}
+
+	private async build(vault: Vault): Promise<void> {
+		this.tokenIndex.clear();
+		const files = vault.getMarkdownFiles();
+		const BATCH = 50;
+		for (let i = 0; i < files.length; i += BATCH) {
+			const batch = files.slice(i, i + BATCH);
+			const items = await Promise.all(
+				batch.map(async (f) => ({ path: f.path, content: await vault.cachedRead(f) }))
+			);
+			for (const { path, content } of items) {
+				this.indexContent(path, content);
+			}
+		}
+		this.built = true;
+	}
+
+	private indexContent(path: string, content: string): void {
+		for (const token of extractTokens(content.toLowerCase())) {
+			let set = this.tokenIndex.get(token);
+			if (!set) {
+				set = new Set();
+				this.tokenIndex.set(token, set);
+			}
+			set.add(path);
+		}
+	}
+
+	/**
+	 * Returns the intersection of token sets for all tokens in the query.
+	 * Returns null if the index is not built or the query has no tokens.
+	 * Returns an empty Set if any token has zero matches (guaranteed no results).
+	 */
+	private lookup(query: string): Set<string> | null {
+		const tokens = extractTokens(query.toLowerCase());
+		if (tokens.length === 0) return null;
+
+		const sets = tokens
+			.map((t) => this.tokenIndex.get(t) ?? new Set<string>())
+			.sort((a, b) => a.size - b.size); // smallest first for fast intersection
+
+		const first = sets[0];
+		if (!first || first.size === 0) return new Set(); // rarest token has zero matches
+
+		const result = new Set(first);
+		for (let i = 1; i < sets.length; i++) {
+			const s = sets[i]!;
+			for (const path of result) {
+				if (!s.has(path)) result.delete(path);
+			}
+		}
+		return result;
+	}
+}
+
+/** Splits text into lowercase tokens of 2+ characters, deduplicates. */
+function extractTokens(text: string): string[] {
+	const tokens = new Set<string>();
+	for (const word of text.split(/[\s\p{P}]+/u)) {
+		if (word.length >= 2) tokens.add(word);
+	}
+	return Array.from(tokens);
+}

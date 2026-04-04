@@ -3,10 +3,12 @@ import { randomBytes } from "crypto";
 import { DEFAULT_SETTINGS, McpServerSettings } from "./types";
 import { ObsidianMcpServer } from "./server/McpServer";
 import { McpSettingsTab } from "./settings/SettingsTab";
+import { VaultIndex } from "./server/VaultIndex";
 
 export default class McpServerPlugin extends Plugin {
 	settings: McpServerSettings;
 	mcpServer: ObsidianMcpServer | null = null;
+	readonly vaultIndex = new VaultIndex();
 
 	async onload() {
 		await this.loadSettings();
@@ -17,6 +19,23 @@ export default class McpServerPlugin extends Plugin {
 		}
 
 		this.addSettingTab(new McpSettingsTab(this.app, this));
+
+		// Keep VaultIndex in sync with vault changes
+		this.registerEvent(
+			this.app.vault.on("modify", (file) => void this.vaultIndex.update(file, this.app.vault))
+		);
+		this.registerEvent(
+			this.app.vault.on("create", (file) => void this.vaultIndex.update(file, this.app.vault))
+		);
+		this.registerEvent(
+			this.app.vault.on("delete", (file) => this.vaultIndex.removeFile(file.path))
+		);
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				this.vaultIndex.removeFile(oldPath);
+				void this.vaultIndex.update(file, this.app.vault);
+			})
+		);
 
 		// eslint-disable-next-line obsidianmd/ui/sentence-case
 		this.addRibbonIcon("plug", "MCP Server", () => {
@@ -63,9 +82,23 @@ export default class McpServerPlugin extends Plugin {
 
 	async startServer() {
 		if (this.mcpServer?.isRunning()) return;
-		this.mcpServer = new ObsidianMcpServer(this.app, this.settings);
-		await this.mcpServer.start();
-		new Notice(`MCP server started on port ${this.settings.port}`);
+		this.mcpServer = new ObsidianMcpServer(this.app, this.settings, this.vaultIndex);
+
+		// Exponential backoff: 1 s → 2 s → 4 s (max 3 attempts)
+		const maxAttempts = 3;
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			try {
+				await this.mcpServer.start();
+				new Notice(`MCP server started on port ${this.settings.port}`);
+				return;
+			} catch (e) {
+				if (attempt === maxAttempts) {
+					new Notice(`MCP server failed to start: ${e instanceof Error ? e.message : String(e)}`);
+					throw e;
+				}
+				await new Promise<void>((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
+			}
+		}
 	}
 
 	async stopServer() {

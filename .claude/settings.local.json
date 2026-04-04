@@ -41,7 +41,9 @@
       "Bash(awk NR==20 || NR==21 || NR==22:*)",
       "Bash(awk NR==74:*)",
       "Bash(awk NR>=594 && NR<=604:*)",
-      "Bash(awk NR>=632 && NR<=642:*)"
+      "Bash(awk NR>=632 && NR<=642:*)",
+      "mcp__obsidian__get_graph_neighbors",
+      "mcp__obsidian__suggest_links"
     ]
   }
 }

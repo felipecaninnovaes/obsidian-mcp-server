@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { registerTools } from "./tools/index";
+import { VaultIndex } from "./VaultIndex";
 import { isRateLimited, recordAuthFailure, cleanupExpiredEntries } from "./rateLimiting";
 import { logger } from "../logger";
 import * as http from "http";
@@ -14,12 +15,14 @@ const MAX_BODY_SIZE = 11 * 1024 * 1024; // 11 MB
 interface StreamableSession {
 	server: McpServer;
 	transport: StreamableHTTPServerTransport;
+	cleanupVaultListeners: () => void;
 }
 
 interface SseSession {
 	server: McpServer;
 	// eslint-disable-next-line @typescript-eslint/no-deprecated
 	transport: SSEServerTransport;
+	cleanupVaultListeners: () => void;
 }
 
 export class ObsidianMcpServer {
@@ -27,15 +30,42 @@ export class ObsidianMcpServer {
 
 	private app: App;
 	private settings: McpServerSettings;
+	private vaultIndex: VaultIndex;
 	private httpServer: http.Server | null = null;
 	private sessions = new Map<string, StreamableSession>();
 	private sseSessions = new Map<string, SseSession>();
 	private running = false;
 	private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
-	constructor(app: App, settings: McpServerSettings) {
+	constructor(app: App, settings: McpServerSettings, vaultIndex: VaultIndex) {
 		this.app = app;
 		this.settings = settings;
+		this.vaultIndex = vaultIndex;
+	}
+
+	/**
+	 * Subscribes to vault events and calls server.sendResourceListChanged() with a 500 ms debounce.
+	 * Returns a cleanup function to unregister the listeners.
+	 */
+	private setupVaultListeners(server: McpServer): () => void {
+		let timer: ReturnType<typeof setTimeout> | null = null;
+		const notify = () => {
+			if (timer) clearTimeout(timer);
+			timer = setTimeout(() => {
+				server.sendResourceListChanged();
+			}, 500);
+		};
+		const refModify = this.app.vault.on("modify", notify);
+		const refCreate = this.app.vault.on("create", notify);
+		const refDelete = this.app.vault.on("delete", notify);
+		const refRename = this.app.vault.on("rename", notify);
+		return () => {
+			if (timer) clearTimeout(timer);
+			this.app.vault.offref(refModify);
+			this.app.vault.offref(refCreate);
+			this.app.vault.offref(refDelete);
+			this.app.vault.offref(refRename);
+		};
 	}
 
 	isRunning(): boolean {
@@ -204,13 +234,15 @@ export class ObsidianMcpServer {
 			version: "1.0.0",
 		});
 
-		registerTools(server, this.app);
+		registerTools(server, this.app, this.vaultIndex);
 		await server.connect(transport);
 
-		this.sessions.set(sid, { server, transport });
+		const cleanupVaultListeners = this.setupVaultListeners(server);
+		this.sessions.set(sid, { server, transport, cleanupVaultListeners });
 		logger.debug(`Session created (total: ${this.sessions.size})`);
 
 		transport.onclose = () => {
+			this.sessions.get(sid)?.cleanupVaultListeners();
 			this.sessions.delete(sid);
 			server.close().catch(() => {});
 			logger.debug(`Session closed (total: ${this.sessions.size})`);
@@ -229,14 +261,16 @@ export class ObsidianMcpServer {
 		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		const transport = new SSEServerTransport("/messages", res);
 		const server = new McpServer({ name: "obsidian-mcp-server", version: "1.0.0" });
-		registerTools(server, this.app);
+		registerTools(server, this.app, this.vaultIndex);
 		await server.connect(transport);
 
 		const sid = transport.sessionId;
-		this.sseSessions.set(sid, { server, transport });
+		const cleanupVaultListeners = this.setupVaultListeners(server);
+		this.sseSessions.set(sid, { server, transport, cleanupVaultListeners });
 		logger.debug(`SSE session created: ${sid} (total: ${this.sseSessions.size})`);
 
 		transport.onclose = () => {
+			this.sseSessions.get(sid)?.cleanupVaultListeners();
 			this.sseSessions.delete(sid);
 			server.close().catch(() => {});
 			logger.debug(`SSE session closed (total: ${this.sseSessions.size})`);
@@ -271,14 +305,16 @@ export class ObsidianMcpServer {
 			this.httpServer = null;
 		}
 
-		for (const { server, transport } of this.sessions.values()) {
+		for (const { server, transport, cleanupVaultListeners } of this.sessions.values()) {
+			cleanupVaultListeners();
 			transport.onclose = undefined;
 			await server.close().catch(() => {});
 			await transport.close().catch(() => {});
 		}
 		this.sessions.clear();
 
-		for (const { server, transport } of this.sseSessions.values()) {
+		for (const { server, transport, cleanupVaultListeners } of this.sseSessions.values()) {
+			cleanupVaultListeners();
 			transport.onclose = undefined;
 			await server.close().catch(() => {});
 			await transport.close().catch(() => {});
