@@ -1,4 +1,4 @@
-import { App, TFile, TFolder } from "obsidian";
+import { App, TFile, TFolder, moment } from "obsidian";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
@@ -45,6 +45,9 @@ export function registerTools(server: McpServer, app: App): void {
 	registerGetNoteMetadata(server, app);
 	registerListTags(server, app);
 	registerGetNoteLinks(server, app);
+	registerEditNote(server, app);
+	registerQueryVault(server, app);
+	registerGetDailyNote(server, app);
 }
 
 function registerListFiles(server: McpServer, app: App): void {
@@ -371,6 +374,273 @@ function registerRenameNote(server: McpServer, app: App): void {
 					{
 						type: "text",
 						text: JSON.stringify({ renamed: { from: safePath, to: safeNewPath }, links_updated_in: updatedFiles }, null, 2),
+					},
+				],
+			};
+		}
+	);
+}
+
+function registerEditNote(server: McpServer, app: App): void {
+	server.registerTool(
+		"edit_note",
+		{
+			description: "Substitui um trecho exato de texto em uma nota de forma atômica, evitando race conditions.",
+			inputSchema: {
+				path: z.string().max(MAX_PATH_LENGTH).describe("Caminho da nota (ex: Pasta/Nota.md)"),
+				old_text: z.string().min(1).max(50_000).describe("Texto exato a localizar e substituir"),
+				new_text: z.string().max(50_000).describe("Texto substituto"),
+				expected_occurrences: z
+					.number()
+					.int()
+					.min(1)
+					.optional()
+					.default(1)
+					.describe("Número esperado de ocorrências (default 1). A operação falha se o count real for diferente."),
+			},
+		},
+		async ({ path, old_text, new_text, expected_occurrences }) => {
+			const safePath = sanitizePath(path);
+			const file = app.vault.getAbstractFileByPath(safePath);
+			if (!(file instanceof TFile)) throw new Error("Arquivo não encontrado");
+
+			let occurrencesReplaced = 0;
+
+			await app.vault.process(file, (content) => {
+				let count = 0;
+				let pos = 0;
+				while ((pos = content.indexOf(old_text, pos)) !== -1) {
+					count++;
+					pos += old_text.length;
+				}
+
+				if (count === 0) {
+					throw new Error("Texto não encontrado na nota");
+				}
+				if (count !== expected_occurrences) {
+					throw new Error(
+						`Esperado ${expected_occurrences} ocorrência(s), mas encontrado ${count}. ` +
+						`Passe expected_occurrences: ${count} para confirmar a substituição.`
+					);
+				}
+
+				occurrencesReplaced = count;
+				return content.split(old_text).join(new_text);
+			});
+
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({ path: safePath, occurrences_replaced: occurrencesReplaced }, null, 2),
+					},
+				],
+			};
+		}
+	);
+}
+
+interface DailyNotesOptions {
+	format?: string;
+	folder?: string;
+	template?: string;
+}
+
+function getDailyNotesConfig(app: App): DailyNotesOptions {
+	// Try built-in Daily Notes plugin first
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const internal = (app as any).internalPlugins?.getPluginById?.("daily-notes");
+	if (internal?.enabled) return internal.instance?.options ?? {};
+	// Fall back to community Periodic Notes plugin
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const periodic = (app as any).plugins?.getPlugin?.("periodic-notes");
+	if (periodic?.settings?.daily) return periodic.settings.daily;
+	return {};
+}
+
+function registerGetDailyNote(server: McpServer, app: App): void {
+	server.registerTool(
+		"get_daily_note",
+		{
+			description:
+				"Retorna a daily note de uma data, respeitando as configurações do plugin Daily Notes. " +
+				"Pode criar a nota se ela não existir.",
+			inputSchema: {
+				date: z
+					.string()
+					.regex(/^\d{4}-\d{2}-\d{2}$/)
+					.optional()
+					.describe("Data no formato YYYY-MM-DD. Default: hoje."),
+				create: z
+					.boolean()
+					.optional()
+					.default(false)
+					.describe("Se true, cria a nota caso não exista."),
+			},
+		},
+		async ({ date, create }) => {
+			const config = getDailyNotesConfig(app);
+			const fmt = config.format || "YYYY-MM-DD";
+			const folder = config.folder ? config.folder.replace(/\/$/, "") : "";
+
+			const targetDate = date ? moment(date, "YYYY-MM-DD", true) : moment();
+			if (!targetDate.isValid()) throw new Error("Data inválida. Use o formato YYYY-MM-DD.");
+
+			const fileName = targetDate.format(fmt) + ".md";
+			const notePath = folder ? `${folder}/${fileName}` : fileName;
+
+			const existing = app.vault.getAbstractFileByPath(notePath);
+			if (existing instanceof TFile) {
+				const content = await app.vault.read(existing);
+				return {
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({ path: notePath, exists: true, content }, null, 2),
+						},
+					],
+				};
+			}
+
+			if (!create) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: JSON.stringify({ path: notePath, exists: false }, null, 2),
+						},
+					],
+				};
+			}
+
+			// Create note, optionally from template
+			let noteContent = "";
+			if (config.template) {
+				const templateFile = app.vault.getAbstractFileByPath(config.template);
+				if (templateFile instanceof TFile) {
+					noteContent = await app.vault.read(templateFile);
+				}
+			}
+
+			await app.vault.create(notePath, noteContent);
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({ path: notePath, exists: false, created: true }, null, 2),
+					},
+				],
+			};
+		}
+	);
+}
+
+function registerQueryVault(server: McpServer, app: App): void {
+	server.registerTool(
+		"query_vault",
+		{
+			description:
+				"Busca notas por tags, propriedades de frontmatter ou links de saída, usando o cache do Obsidian " +
+				"(sem ler arquivos do disco). Todos os filtros fornecidos são aplicados em conjunto (AND).",
+			inputSchema: {
+				tags: z
+					.array(z.string().max(100))
+					.max(20)
+					.optional()
+					.describe("Notas que contêm TODAS as tags listadas. Ex: [\"#projeto\", \"ativo\"]"),
+				properties: z
+					.record(z.string(), z.unknown())
+					.optional()
+					.describe("Pares chave/valor do frontmatter que devem corresponder. Ex: { \"status\": \"ativo\" }"),
+				links_to: z
+					.string()
+					.max(MAX_PATH_LENGTH)
+					.optional()
+					.describe("Retorna notas que linkam para este caminho (ex: Pasta/Nota.md)"),
+				has_frontmatter: z
+					.boolean()
+					.optional()
+					.describe("Se true, retorna só notas COM frontmatter; se false, só notas SEM."),
+				limit: z
+					.number()
+					.int()
+					.min(1)
+					.max(200)
+					.optional()
+					.default(50)
+					.describe("Máximo de resultados (default 50, max 200)"),
+			},
+		},
+		async ({ tags, properties, links_to, has_frontmatter, limit }) => {
+			// Resolve target path for links_to filter
+			let targetPath: string | null = null;
+			if (links_to) {
+				const safeLinksTo = sanitizePath(links_to);
+				const targetFile = app.vault.getAbstractFileByPath(safeLinksTo);
+				if (!(targetFile instanceof TFile)) throw new Error(`Nota não encontrada: ${safeLinksTo}`);
+				targetPath = targetFile.path;
+			}
+
+			// Normalize tags: ensure all start with '#'
+			const normalizedFilterTags = tags?.map((t) => (t.startsWith("#") ? t : `#${t}`));
+
+			const results: { path: string; tags: string[]; frontmatter: Record<string, unknown> | null }[] = [];
+
+			for (const file of app.vault.getMarkdownFiles()) {
+				const cache = app.metadataCache.getFileCache(file);
+
+				// Filter: has_frontmatter
+				if (has_frontmatter !== undefined) {
+					if ((cache?.frontmatter != null) !== has_frontmatter) continue;
+				}
+
+				// Collect all tags (inline + frontmatter)
+				const fileTags = new Set<string>();
+				for (const { tag } of cache?.tags ?? []) fileTags.add(tag);
+				const fmTags = cache?.frontmatter?.["tags"];
+				if (Array.isArray(fmTags)) {
+					for (const t of fmTags) {
+						if (typeof t === "string") fileTags.add(t.startsWith("#") ? t : `#${t}`);
+					}
+				}
+
+				// Filter: tags (all must be present)
+				if (normalizedFilterTags && normalizedFilterTags.length > 0) {
+					if (!normalizedFilterTags.every((t) => fileTags.has(t))) continue;
+				}
+
+				// Filter: properties (all key/value pairs must match frontmatter)
+				if (properties && Object.keys(properties).length > 0) {
+					const fm = cache?.frontmatter;
+					if (!fm) continue;
+					const match = Object.entries(properties).every(
+						([k, v]) => JSON.stringify(fm[k]) === JSON.stringify(v)
+					);
+					if (!match) continue;
+				}
+
+				// Filter: links_to (file must have a resolved link to targetPath)
+				if (targetPath) {
+					const resolved = app.metadataCache.resolvedLinks[file.path] ?? {};
+					if (!resolved[targetPath]) continue;
+				}
+
+				// Build safe frontmatter (strip Obsidian internal 'position' key)
+				let frontmatter: Record<string, unknown> | null = null;
+				if (cache?.frontmatter) {
+					const { position: _, ...rest } = cache.frontmatter;
+					frontmatter = rest;
+				}
+
+				results.push({ path: file.path, tags: Array.from(fileTags), frontmatter });
+				if (results.length >= limit) break;
+			}
+
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({ total: results.length, results }, null, 2),
 					},
 				],
 			};
