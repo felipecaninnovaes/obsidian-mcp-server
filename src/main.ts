@@ -37,6 +37,9 @@ export default class McpServerPlugin extends Plugin {
 			})
 		);
 
+		// Warm up the index in the background so the first search is fast
+		this.vaultIndex.buildInBackground(this.app.vault);
+
 		// eslint-disable-next-line obsidianmd/ui/sentence-case
 		this.addRibbonIcon("plug", "MCP Server", () => {
 			if (this.mcpServer?.isRunning()) {

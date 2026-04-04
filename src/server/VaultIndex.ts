@@ -16,10 +16,27 @@ import { BATCH_SIZE } from "../constants";
  */
 export class VaultIndex {
 	private readonly tokenIndex = new Map<string, Set<string>>();
+	/** Reverse map: path → Set of tokens it contributes. Enables O(1) removeFile. */
+	private readonly pathTokens = new Map<string, Set<string>>();
 	private built = false;
+	/** In-flight build promise — shared across concurrent getCandidates() callers. */
+	private buildPromise: Promise<void> | null = null;
 
 	isBuilt(): boolean {
 		return this.built;
+	}
+
+	/**
+	 * Starts a background build without blocking.
+	 * Call from onload() so the index is ready before the first search request.
+	 * Subsequent calls while a build is already running are no-ops.
+	 */
+	buildInBackground(vault: Vault): void {
+		if (!this.built && !this.buildPromise) {
+			this.buildPromise = this.build(vault).finally(() => {
+				this.buildPromise = null;
+			});
+		}
 	}
 
 	/** Lazily builds the index if not already built, then returns candidate paths. */
@@ -36,22 +53,33 @@ export class VaultIndex {
 		this.indexContent(file.path, content);
 	}
 
-	/** Remove a file from the index (call on vault delete/rename events). */
+	/**
+	 * Remove a file from the index (call on vault delete/rename events).
+	 * O(tokens_do_arquivo) instead of O(tokens_totais_do_vault).
+	 */
 	removeFile(path: string): void {
-		for (const set of this.tokenIndex.values()) {
-			set.delete(path);
+		const tokens = this.pathTokens.get(path);
+		if (!tokens) return;
+		for (const token of tokens) {
+			this.tokenIndex.get(token)?.delete(path);
 		}
+		this.pathTokens.delete(path);
 	}
 
 	// ── Private ──────────────────────────────────────────────────────────────
 
 	private async ensureBuilt(vault: Vault): Promise<void> {
 		if (this.built) return;
+		if (this.buildPromise) {
+			await this.buildPromise;
+			return;
+		}
 		await this.build(vault);
 	}
 
 	private async build(vault: Vault): Promise<void> {
 		this.tokenIndex.clear();
+		this.pathTokens.clear();
 		const files = vault.getMarkdownFiles();
 		for (let i = 0; i < files.length; i += BATCH_SIZE) {
 			const batch = files.slice(i, i + BATCH_SIZE);
@@ -66,7 +94,15 @@ export class VaultIndex {
 	}
 
 	private indexContent(path: string, content: string): void {
-		for (const token of extractTokens(content.toLowerCase())) {
+		const tokens = extractTokens(content);
+		// Maintain reverse map for O(1) removeFile
+		let pathSet = this.pathTokens.get(path);
+		if (!pathSet) {
+			pathSet = new Set();
+			this.pathTokens.set(path, pathSet);
+		}
+		for (const token of tokens) {
+			pathSet.add(token);
 			let set = this.tokenIndex.get(token);
 			if (!set) {
 				set = new Set();
@@ -82,7 +118,7 @@ export class VaultIndex {
 	 * Returns an empty Set if any token has zero matches (guaranteed no results).
 	 */
 	private lookup(query: string): Set<string> | null {
-		const tokens = extractTokens(query.toLowerCase());
+		const tokens = extractTokens(query);
 		if (tokens.length === 0) return null;
 
 		const sets = tokens
@@ -102,4 +138,3 @@ export class VaultIndex {
 		return result;
 	}
 }
-
