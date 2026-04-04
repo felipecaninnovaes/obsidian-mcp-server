@@ -17,3 +17,8 @@ export const MAX_BODY_SIZE = 11 * 1024 * 1024;
 export const SEARCH_RESULTS_DEFAULT = 20;
 export const QUERY_RESULTS_DEFAULT = 50;
 export const QUERY_RESULTS_MAX = 200;
+
+/** Maximum query length for regex mode (long patterns risk ReDoS). */
+export const MAX_REGEX_QUERY_LENGTH = 200;
+/** Maximum number of total regex matches before aborting a file scan. */
+export const REGEX_MATCH_LIMIT = 1_000;

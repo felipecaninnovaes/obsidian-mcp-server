@@ -6,6 +6,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { registerTools } from "./tools/index";
 import { VaultIndex } from "./VaultIndex";
 import { BacklinkIndex } from "./BacklinkIndex";
+import { DeleteLog } from "./DeleteLog";
 import { isRateLimited, recordAuthFailure, cleanupExpiredEntries } from "./rateLimiting";
 import { logger } from "../logger";
 import * as http from "http";
@@ -31,17 +32,19 @@ export class ObsidianMcpServer {
 	private settings: McpServerSettings;
 	private vaultIndex: VaultIndex;
 	private backlinkIndex: BacklinkIndex;
+	private deleteLog: DeleteLog;
 	private httpServer: http.Server | null = null;
 	private sessions = new Map<string, StreamableSession>();
 	private sseSessions = new Map<string, SseSession>();
 	private running = false;
 	private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
-	constructor(app: App, settings: McpServerSettings, vaultIndex: VaultIndex, backlinkIndex: BacklinkIndex) {
+	constructor(app: App, settings: McpServerSettings, vaultIndex: VaultIndex, backlinkIndex: BacklinkIndex, deleteLog: DeleteLog) {
 		this.app = app;
 		this.settings = settings;
 		this.vaultIndex = vaultIndex;
 		this.backlinkIndex = backlinkIndex;
+		this.deleteLog = deleteLog;
 	}
 
 	/**
@@ -235,7 +238,7 @@ export class ObsidianMcpServer {
 			version: "1.0.0",
 		});
 
-		registerTools(server, this.app, this.vaultIndex, this.backlinkIndex);
+		registerTools(server, this.app, this.vaultIndex, this.backlinkIndex, this.deleteLog);
 		await server.connect(transport);
 
 		const cleanupVaultListeners = this.setupVaultListeners(server);
@@ -262,7 +265,7 @@ export class ObsidianMcpServer {
 		// eslint-disable-next-line @typescript-eslint/no-deprecated
 		const transport = new SSEServerTransport("/messages", res);
 		const server = new McpServer({ name: "obsidian-mcp-server", version: "1.0.0" });
-		registerTools(server, this.app, this.vaultIndex, this.backlinkIndex);
+		registerTools(server, this.app, this.vaultIndex, this.backlinkIndex, this.deleteLog);
 		await server.connect(transport);
 
 		const sid = transport.sessionId;

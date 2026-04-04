@@ -49,7 +49,8 @@
       "Bash(grep -n \"^[[:space:]]*\\\\/\\\\/\" /var/home/felipecn/DEV/obsidian-mcp-server/src/**/*.ts)",
       "Bash(grep -n \"^[[:space:]]*\\\\/\\\\*\" /var/home/felipecn/DEV/obsidian-mcp-server/src/**/*.ts)",
       "mcp__obsidian__get_vault_context",
-      "mcp__obsidian__update_note_metadata"
+      "mcp__obsidian__update_note_metadata",
+      "mcp__obsidian__get_vault_changes"
     ]
   }
 }

@@ -110,6 +110,53 @@ export function buildSmartExcerpt(
 	return lastHeading ? `${lastHeading} > ${excerpt}` : excerpt;
 }
 
+// ── Regex search ──────────────────────────────────────────────────────────────
+
+export interface RegexMatchResult {
+	/** Index of the first match in the content string. */
+	firstMatchIdx: number;
+	/** Length of the first match. */
+	firstMatchLen: number;
+	/** Total number of matches found before the limit was reached. */
+	matchCount: number;
+	/** True when the match limit was hit — the scan was aborted early. */
+	limitReached: boolean;
+}
+
+/**
+ * Searches `content` with a pre-compiled regex and returns aggregated match info.
+ * Stops scanning once `matchLimit` total matches are found to prevent runaway regexes.
+ *
+ * The regex MUST have the `g` flag set.
+ */
+export function execRegexSearch(
+	content: string,
+	regex: RegExp,
+	matchLimit: number
+): RegexMatchResult | null {
+	regex.lastIndex = 0; // reset in case the regex is reused across files
+	let firstMatchIdx = -1;
+	let firstMatchLen = 0;
+	let matchCount = 0;
+	let m: RegExpExecArray | null;
+
+	while ((m = regex.exec(content)) !== null) {
+		if (firstMatchIdx === -1) {
+			firstMatchIdx = m.index;
+			firstMatchLen = m[0].length;
+		}
+		matchCount++;
+		if (matchCount >= matchLimit) {
+			return { firstMatchIdx, firstMatchLen, matchCount, limitReached: true };
+		}
+		// Prevent infinite loop on zero-length matches
+		if (m[0].length === 0) regex.lastIndex++;
+	}
+
+	if (firstMatchIdx === -1) return null;
+	return { firstMatchIdx, firstMatchLen, matchCount, limitReached: false };
+}
+
 // ── Pagination helpers ────────────────────────────────────────────────────────
 
 /**

@@ -3,14 +3,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sanitizePath, MAX_PATH_LENGTH } from "./utils";
 import { resolveNoteFile } from "./noteUtils";
+import { DeleteLog } from "../DeleteLog";
 
-export function registerMetadataTools(server: McpServer, app: App): void {
+export function registerMetadataTools(server: McpServer, app: App, deleteLog: DeleteLog): void {
 	registerGetNoteMetadata(server, app);
 	registerListTags(server, app);
 	registerGetNoteLinks(server, app);
 	registerGetBacklinks(server, app);
 	registerUpdateNoteMetadata(server, app);
 	registerGetVaultContext(server, app);
+	registerGetVaultChanges(server, app, deleteLog);
 }
 
 function registerGetNoteMetadata(server: McpServer, app: App): void {
@@ -331,6 +333,83 @@ function needsYamlQuoting(s: string): boolean {
 	// Strings that look like numbers should be quoted to preserve them as strings
 	if (s !== "" && !isNaN(Number(s))) return true;
 	return false;
+}
+
+// ── get_vault_changes ─────────────────────────────────────────────────────────
+
+function registerGetVaultChanges(server: McpServer, app: App, deleteLog: DeleteLog): void {
+	server.registerTool(
+		"get_vault_changes",
+		{
+			description:
+				"Lista arquivos criados, modificados ou deletados desde uma data/hora. " +
+				"Deletados são rastreados apenas nas últimas 24 horas. " +
+				"Útil para sincronizar o estado do vault com ferramentas externas.",
+			inputSchema: {
+				since: z
+					.string()
+					.describe("Timestamp ISO 8601 a partir do qual buscar mudanças. Ex: \"2026-01-01T00:00:00Z\""),
+				types: z
+					.array(z.enum(["created", "modified", "deleted"]))
+					.optional()
+					.describe("Tipos de mudança a incluir (default: todos)."),
+			},
+		},
+		async ({ since, types }) => {
+			const sinceMs = new Date(since).getTime();
+			if (isNaN(sinceMs)) throw new Error(`Timestamp inválido: ${since}`);
+
+			const includeAll = !types || types.length === 0;
+			const include = (t: "created" | "modified" | "deleted") =>
+				includeAll || types!.includes(t);
+
+			type ChangeEntry = { path: string; type: "created" | "modified" | "deleted"; timestamp: string };
+			const changes: ChangeEntry[] = [];
+
+			// Created & modified — iterate live files
+			if (include("created") || include("modified")) {
+				for (const file of app.vault.getMarkdownFiles()) {
+					if (include("created") && file.stat.ctime >= sinceMs) {
+						changes.push({
+							path: file.path,
+							type: "created",
+							timestamp: new Date(file.stat.ctime).toISOString(),
+						});
+					} else if (include("modified") && file.stat.mtime >= sinceMs) {
+						// Only emit "modified" when not also reporting as "created"
+						changes.push({
+							path: file.path,
+							type: "modified",
+							timestamp: new Date(file.stat.mtime).toISOString(),
+						});
+					}
+				}
+			}
+
+			// Deleted — from the in-memory log (24 h retention)
+			if (include("deleted")) {
+				for (const entry of deleteLog.getSince(sinceMs)) {
+					changes.push({
+						path: entry.path,
+						type: "deleted",
+						timestamp: new Date(entry.timestamp).toISOString(),
+					});
+				}
+			}
+
+			// Sort chronologically
+			changes.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify({ since, total: changes.length, changes }, null, 2),
+					},
+				],
+			};
+		}
+	);
 }
 
 // ── Tag counting helper ───────────────────────────────────────────────────────

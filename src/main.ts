@@ -5,12 +5,14 @@ import { ObsidianMcpServer } from "./server/McpServer";
 import { McpSettingsTab } from "./settings/SettingsTab";
 import { VaultIndex } from "./server/VaultIndex";
 import { BacklinkIndex } from "./server/BacklinkIndex";
+import { DeleteLog } from "./server/DeleteLog";
 
 export default class McpServerPlugin extends Plugin {
 	settings: McpServerSettings;
 	mcpServer: ObsidianMcpServer | null = null;
 	readonly vaultIndex = new VaultIndex();
 	readonly backlinkIndex = new BacklinkIndex();
+	readonly deleteLog = new DeleteLog();
 
 	async onload() {
 		await this.loadSettings();
@@ -39,6 +41,7 @@ export default class McpServerPlugin extends Plugin {
 			this.app.vault.on("delete", (file) => {
 				this.vaultIndex.removeFile(file.path);
 				this.backlinkIndex.removeFile(file.path);
+				this.deleteLog.record(file.path);
 			})
 		);
 		this.registerEvent(
@@ -99,7 +102,7 @@ export default class McpServerPlugin extends Plugin {
 
 	async startServer() {
 		if (this.mcpServer?.isRunning()) return;
-		this.mcpServer = new ObsidianMcpServer(this.app, this.settings, this.vaultIndex, this.backlinkIndex);
+		this.mcpServer = new ObsidianMcpServer(this.app, this.settings, this.vaultIndex, this.backlinkIndex, this.deleteLog);
 
 		// Exponential backoff: 1 s → 2 s → 4 s (max 3 attempts)
 		const maxAttempts = 3;
