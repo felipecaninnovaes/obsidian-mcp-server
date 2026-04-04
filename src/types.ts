@@ -1,9 +1,12 @@
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
 export interface McpServerSettings {
 	port: number;
 	apiKey: string;
 	enableAuth: boolean;
 	autoStart: boolean;
 	networkAccess: boolean;
+	logLevel: LogLevel;
 }
 
 export const DEFAULT_SETTINGS: McpServerSettings = {
@@ -12,4 +15,5 @@ export const DEFAULT_SETTINGS: McpServerSettings = {
 	enableAuth: true,
 	autoStart: true,
 	networkAccess: false,
+	logLevel: "info",
 };

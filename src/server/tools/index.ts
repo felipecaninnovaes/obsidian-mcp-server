@@ -1,34 +1,11 @@
 import { App, TFile, TFolder, moment } from "obsidian";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { sanitizePath, applyTextEdit, MAX_PATH_LENGTH } from "./utils";
+import { logger } from "../../logger";
 
-const MAX_PATH_LENGTH = 512;
 const MAX_CONTENT_LENGTH = 10_000_000; // 10 MB
 const MAX_QUERY_LENGTH = 1_000;
-
-/**
- * Validates and normalizes a vault-relative path.
- * Rejects absolute paths, path traversal sequences, and paths that are too long.
- */
-function sanitizePath(path: string): string {
-	if (path.length > MAX_PATH_LENGTH) {
-		throw new Error("Path too long (max 512 characters)");
-	}
-	// Reject absolute paths and any traversal attempts
-	if (path.startsWith("/") || /(?:^|\/)\.\.(?:\/|$)/.test(path)) {
-		throw new Error("Invalid path: absolute paths and directory traversal are not allowed");
-	}
-	// Normalize separators and collapse redundant segments
-	const normalized = path
-		.replace(/\\/g, "/")
-		.split("/")
-		.filter((segment) => segment.length > 0 && segment !== ".")
-		.join("/");
-	if (normalized.length === 0) {
-		throw new Error("Invalid path: empty after normalization");
-	}
-	return normalized;
-}
 
 export function registerTools(server: McpServer, app: App): void {
 	registerListFiles(server, app);
@@ -366,7 +343,7 @@ function registerRenameNote(server: McpServer, app: App): void {
 					}
 				}
 			} catch (e) {
-				console.error("[MCP Server] Error updating links after rename:", e);
+				logger.error("Error updating links after rename:", e);
 			}
 
 			return {
@@ -407,25 +384,9 @@ function registerEditNote(server: McpServer, app: App): void {
 			let occurrencesReplaced = 0;
 
 			await app.vault.process(file, (content) => {
-				let count = 0;
-				let pos = 0;
-				while ((pos = content.indexOf(old_text, pos)) !== -1) {
-					count++;
-					pos += old_text.length;
-				}
-
-				if (count === 0) {
-					throw new Error("Texto não encontrado na nota");
-				}
-				if (count !== expected_occurrences) {
-					throw new Error(
-						`Esperado ${expected_occurrences} ocorrência(s), mas encontrado ${count}. ` +
-						`Passe expected_occurrences: ${count} para confirmar a substituição.`
-					);
-				}
-
-				occurrencesReplaced = count;
-				return content.split(old_text).join(new_text);
+				const result = applyTextEdit(content, old_text, new_text, expected_occurrences);
+				occurrencesReplaced = result.count;
+				return result.content;
 			});
 
 			return {

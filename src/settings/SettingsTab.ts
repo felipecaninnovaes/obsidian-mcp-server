@@ -1,5 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type McpServerPlugin from "../main";
+import type { LogLevel } from "../types";
 
 export class McpSettingsTab extends PluginSettingTab {
 	plugin: McpServerPlugin;
@@ -86,6 +87,19 @@ export class McpSettingsTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.networkAccess)
 					.onChange(async (value) => {
 						this.plugin.settings.networkAccess = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Log level")
+			.setDesc("Controls verbosity of server logs in the developer console.")
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({ debug: "Debug", info: "Info", warn: "Warn", error: "Error" })
+					.setValue(this.plugin.settings.logLevel)
+					.onChange(async (value) => {
+						this.plugin.settings.logLevel = value as LogLevel;
 						await this.plugin.saveSettings();
 					})
 			);

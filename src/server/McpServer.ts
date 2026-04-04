@@ -4,31 +4,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { registerTools } from "./tools/index";
+import { isRateLimited, recordAuthFailure, cleanupExpiredEntries } from "./rateLimiting";
+import { logger } from "../logger";
 import * as http from "http";
 import { randomBytes, timingSafeEqual } from "crypto";
 
-// Rate limiting for auth failures
-const authFailures = new Map<string, { count: number; resetAt: number }>();
-const MAX_AUTH_FAILURES = 10;
-const WINDOW_MS = 60_000; // 1 minute
 const MAX_BODY_SIZE = 11 * 1024 * 1024; // 11 MB
-
-function isRateLimited(ip: string): boolean {
-	const now = Date.now();
-	const entry = authFailures.get(ip);
-	if (!entry || now > entry.resetAt) return false;
-	return entry.count >= MAX_AUTH_FAILURES;
-}
-
-function recordAuthFailure(ip: string): void {
-	const now = Date.now();
-	const entry = authFailures.get(ip);
-	if (!entry || now > entry.resetAt) {
-		authFailures.set(ip, { count: 1, resetAt: now + WINDOW_MS });
-	} else {
-		entry.count++;
-	}
-}
 
 interface StreamableSession {
 	server: McpServer;
@@ -164,9 +145,11 @@ export class ObsidianMcpServer {
 
 		const bindHost = this.settings.networkAccess ? "0.0.0.0" : "127.0.0.1";
 
+		logger.setLevel(this.settings.logLevel);
+
 		await new Promise<void>((resolve, reject) => {
 			this.httpServer!.listen(this.settings.port, bindHost, () => {
-				console.log(`[MCP Server] Listening on http://${bindHost}:${this.settings.port}/mcp`);
+				logger.info(`Listening on http://${bindHost}:${this.settings.port}/mcp`);
 				resolve();
 			});
 			this.httpServer!.on("error", reject);
@@ -175,12 +158,7 @@ export class ObsidianMcpServer {
 		this.running = true;
 
 		// Periodically evict expired rate-limit entries to prevent unbounded memory growth
-		this.cleanupInterval = setInterval(() => {
-			const now = Date.now();
-			for (const [ip, entry] of authFailures) {
-				if (now > entry.resetAt) authFailures.delete(ip);
-			}
-		}, 5 * 60_000);
+		this.cleanupInterval = setInterval(cleanupExpiredEntries, 5 * 60_000);
 	}
 
 	private async handleMcpRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -228,12 +206,12 @@ export class ObsidianMcpServer {
 		await server.connect(transport);
 
 		this.sessions.set(sid, { server, transport });
-		console.log(`[MCP Server] Session created (total: ${this.sessions.size})`);
+		logger.debug(`Session created (total: ${this.sessions.size})`);
 
 		transport.onclose = () => {
 			this.sessions.delete(sid);
 			server.close().catch(() => {});
-			console.log(`[MCP Server] Session closed (total: ${this.sessions.size})`);
+			logger.debug(`Session closed (total: ${this.sessions.size})`);
 		};
 
 		await transport.handleRequest(req, res);
@@ -253,12 +231,12 @@ export class ObsidianMcpServer {
 
 		const sid = transport.sessionId;
 		this.sseSessions.set(sid, { server, transport });
-		console.log(`[MCP Server] SSE session created: ${sid} (total: ${this.sseSessions.size})`);
+		logger.debug(`SSE session created: ${sid} (total: ${this.sseSessions.size})`);
 
 		transport.onclose = () => {
 			this.sseSessions.delete(sid);
 			server.close().catch(() => {});
-			console.log(`[MCP Server] SSE session closed (total: ${this.sseSessions.size})`);
+			logger.debug(`SSE session closed (total: ${this.sseSessions.size})`);
 		};
 
 		await transport.start();

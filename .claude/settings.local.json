@@ -27,7 +27,9 @@
       "mcp__obsidian__get_note_links",
       "mcp__obsidian__query_vault",
       "mcp__obsidian__get_daily_note",
-      "mcp__obsidian__edit_note"
+      "mcp__obsidian__edit_note",
+      "Bash(node -e \"require\\('./node_modules/vitest/package.json'\\)\")",
+      "Bash(npm test:*)"
     ]
   }
 }
