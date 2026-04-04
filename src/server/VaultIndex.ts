@@ -26,6 +26,16 @@ export class VaultIndex {
 		return this.built;
 	}
 
+	/** Number of documents (markdown files) currently indexed. */
+	getTotalDocs(): number {
+		return this.pathTokens.size;
+	}
+
+	/** Number of documents that contain the given token (for IDF calculation). */
+	getTokenDocCount(token: string): number {
+		return this.tokenIndex.get(token.toLowerCase())?.size ?? 0;
+	}
+
 	/**
 	 * Starts a background build without blocking.
 	 * Call from onload() so the index is ready before the first search request.
