@@ -17,8 +17,7 @@ jobs:
               uses: actions/setup-node@v4
               with:
                   node-version: 22.x
-                  cache: "npm"
-            - run: npm ci --legacy-peer-deps
+            - run: npm install --legacy-peer-deps
             - run: npm run build
             - run: npm test
             - name: Create GitHub Release

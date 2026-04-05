@@ -69,7 +69,11 @@ function registerReadNote(server: McpServer, app: App): void {
 		{
 			description: "Lê o conteúdo de uma nota pelo caminho.",
 			inputSchema: {
-				path: z.string().max(MAX_PATH_LENGTH).describe("Caminho da nota (ex: Pasta/Nota.md)"),
+				path: z.string().max(MAX_PATH_LENGTH).describe(
+					"Caminho vault-relativo da nota, incluindo extensão. " +
+					"Preserve espaços e hífens exatamente como retornado por list_files. " +
+					"Ex: 'PESSOAL/MINHA HISTORIA/01 - Quem foi Alex.md'"
+				),
 			},
 		},
 		async ({ path }) => {
