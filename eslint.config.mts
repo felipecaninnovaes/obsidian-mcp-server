@@ -8,12 +8,14 @@ export default tseslint.config(
 		languageOptions: {
 			globals: {
 				...globals.browser,
+				...globals.node,
 			},
 			parserOptions: {
 				projectService: {
 					allowDefaultProject: [
 						'eslint.config.js',
-						'manifest.json'
+						'manifest.json',
+						'vitest.config.ts',
 					]
 				},
 				tsconfigRootDir: import.meta.dirname,
@@ -22,6 +24,12 @@ export default tseslint.config(
 		},
 	},
 	...obsidianmd.configs.recommended,
+	{
+		rules: {
+			// Allow console.info in addition to the obsidianmd default (warn, error, debug)
+			"no-console": ["error", { allow: ["warn", "error", "debug", "info"] }],
+		},
+	},
 	globalIgnores([
 		"node_modules",
 		"dist",

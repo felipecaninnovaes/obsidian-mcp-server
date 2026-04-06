@@ -1,90 +1,188 @@
-# Obsidian Sample Plugin
+# Obsidian MCP Server
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+An [Obsidian](https://obsidian.md) community plugin that embeds an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) HTTP server directly inside Obsidian, allowing any MCP-compatible IDE or AI client to read and write notes in your vault.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+> **Desktop only** — requires Obsidian 1.4.0 or later.
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+---
 
-## First time developing plugins?
+## Features
 
-Quick starting guide for new plugin devs:
+The plugin exposes the following MCP tools to connected clients:
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+| Tool | Description |
+|---|---|
+| `list_files` | List files and folders in the vault |
+| `read_note` | Read the content of a note by path |
+| `create_note` | Create a new note |
+| `update_note` | Update an existing note (overwrite / append / prepend) |
+| `delete_note` | Delete a file from the vault |
+| `search_vault` | Full-text search across all markdown notes |
+| `get_active_note` | Return the note currently open in the editor |
+| `get_vault_info` | Return vault metadata (file count, folders, etc.) |
 
-## Releasing new releases
+---
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+## Installation
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+### From GitHub Releases (recommended)
 
-## Adding your plugin to the community plugin list
+1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](../../releases/latest).
+2. Copy the three files into your vault plugin folder:
+   ```
+   <Vault>/.obsidian/plugins/obsidian-mcp-server/
+   ```
+3. Reload Obsidian and go to **Settings → Community plugins**.
+4. Enable **MCP Server**.
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+### BRAT (beta testing)
 
-## How to use
+Install [BRAT](https://github.com/TfTHacker/obsidian42-brat) and add this repository URL to test pre-release builds.
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+---
 
-## Manually installing the plugin
+## Building from Source
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+### Prerequisites
 
-## Improve code quality with eslint
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
+- [Node.js](https://nodejs.org) 18 LTS or later
+- npm (bundled with Node.js)
 
-## Funding URL
+### Steps
 
-You can include funding URLs where people who use your plugin can financially support it.
+```bash
+# Clone the repository
+git clone https://github.com/felipecn/obsidian-mcp-server.git
+cd obsidian-mcp-server
 
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
+# Install dependencies
+npm install
 
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
+# Development build (watch mode — rebuilds on file changes)
+npm run dev
+
+# Production build (type-checked, minified)
+npm run build
 ```
 
-If you have multiple URLs, you can also do:
+The production build outputs `main.js` at the project root. Copy `main.js`, `manifest.json`, and `styles.css` into your vault's plugin folder to test locally.
+
+### Linting
+
+```bash
+npm run lint
+```
+
+---
+
+## Configuration
+
+After enabling the plugin, open **Settings → MCP Server**:
+
+| Option | Default | Description |
+|---|---|---|
+| **Port** | `27123` | Port the HTTP server listens on |
+| **API Key** | auto-generated | Secret key required by MCP clients |
+| **Require authentication** | `true` | Reject requests without the API key |
+| **Auto-start on load** | `true` | Start the server when Obsidian opens |
+| **Network access** | `false` | Bind to `0.0.0.0` to accept connections from other devices on the network |
+
+The **API Key** is auto-generated on first load. Copy it from the settings tab using the **Copy** button.
+
+---
+
+## Connecting an MCP Client
+
+Once the server is running, it is available at:
+
+```
+http://localhost:27123/mcp
+```
+
+Pass the API key as a `Bearer` token in the `Authorization` header:
+
+```
+Authorization: Bearer <your-api-key>
+```
+
+### Example — Claude Desktop (`claude_desktop_config.json`)
+
+Claude Desktop only supports stdio transport. Use [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) as a proxy.
+
+**Step 1 — install `mcp-remote` globally** (one-time):
+
+```bash
+npm install -g mcp-remote
+```
+
+> **Windows note:** do not use `npx mcp-remote`. If Node.js is installed in a path with spaces (e.g. `D:\Program Files\nodejs`), Claude Desktop will fail to launch `npx` correctly. Installing globally avoids this.
+
+**Step 2 — add to `claude_desktop_config.json`:**
 
 ```json
 {
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
+  "mcpServers": {
+    "obsidian": {
+      "command": "mcp-remote",
+      "args": [
+        "http://localhost:27123/sse",
+        "--header",
+        "Authorization:Bearer <your-api-key>"
+      ]
     }
+  }
 }
 ```
 
-## API Documentation
+> **No authentication?** If you disable *Require authentication* in the plugin settings, omit the `--header` arguments. Only do this if *Network access* is also off.
 
-See https://docs.obsidian.md
+### Example — Claude Code / other Streamable HTTP clients
+
+```json
+{
+  "mcpServers": {
+    "obsidian": {
+      "url": "http://localhost:27123/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-api-key>"
+      }
+    }
+  }
+}
+```
+
+### Health check
+
+```
+GET http://localhost:27123/health
+```
+
+Returns `{"status":"ok","version":"1.0.0"}` — no authentication required.
+
+---
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `Start MCP Server` | Start the server |
+| `Stop MCP Server` | Stop the server |
+| `Copy MCP Server URL` | Copy the server URL to clipboard |
+
+The ribbon icon (plug) also toggles the server on/off.
+
+---
+
+## Security
+
+- By default the server binds to `127.0.0.1` (localhost only).
+- Authentication is **enabled by default**. Disabling it is only safe if `Network access` is also off.
+- Enabling `Network access` without authentication is blocked at startup.
+- CORS is restricted to `localhost` and `127.0.0.1` origins.
+- All vault paths are validated and sanitized — absolute paths and directory traversal (`../`) are rejected.
+
+---
+
+## License
+
+0BSD — see [LICENSE](LICENSE).

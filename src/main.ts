@@ -1,99 +1,182 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import { Plugin, Notice } from "obsidian";
+import { randomBytes } from "crypto";
+import { DEFAULT_SETTINGS, McpServerSettings } from "./types";
+import { ObsidianMcpServer } from "./server/McpServer";
+import { McpSettingsTab } from "./settings/SettingsTab";
+import { VaultIndex } from "./server/VaultIndex";
+import { BacklinkIndex } from "./server/BacklinkIndex";
+import { DeleteLog } from "./server/DeleteLog";
+import { SemanticIndex } from "./server/SemanticIndex";
+import { EMBEDDING_DEBOUNCE_MS } from "./constants";
 
-// Remember to rename these classes and interfaces!
+export default class McpServerPlugin extends Plugin {
+	settings: McpServerSettings;
+	mcpServer: ObsidianMcpServer | null = null;
+	readonly vaultIndex = new VaultIndex();
+	readonly backlinkIndex = new BacklinkIndex();
+	readonly deleteLog = new DeleteLog();
+	readonly semanticIndex = new SemanticIndex();
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+	/** Per-file debounce timers for re-embedding on vault modify/create. */
+	private readonly embeddingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	async onload() {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
+		if (!this.settings.apiKey) {
+			this.settings.apiKey = randomBytes(32).toString("hex");
+			await this.saveSettings();
+		}
+
+		this.addSettingTab(new McpSettingsTab(this.app, this));
+
+		// Configure semantic index from settings (only if enabled)
+		if (this.settings.semanticSearch) {
+			this.semanticIndex.configure({
+				endpoint: this.settings.embeddingEndpoint,
+				apiKey: this.settings.embeddingApiKey,
+				model: this.settings.embeddingModel,
+			});
+		}
+
+		// Keep VaultIndex in sync with vault changes
+		this.registerEvent(
+			this.app.vault.on("modify", (file) => {
+				void this.vaultIndex.update(file, this.app.vault);
+				this.backlinkIndex.update(file.path, this.app);
+				this.scheduleSemanticUpdate(file.path);
+			})
+		);
+		this.registerEvent(
+			this.app.vault.on("create", (file) => {
+				void this.vaultIndex.update(file, this.app.vault);
+				this.backlinkIndex.update(file.path, this.app);
+				this.scheduleSemanticUpdate(file.path);
+			})
+		);
+		this.registerEvent(
+			this.app.vault.on("delete", (file) => {
+				this.vaultIndex.removeFile(file.path);
+				this.backlinkIndex.removeFile(file.path);
+				this.deleteLog.record(file.path);
+				this.semanticIndex.removeFile(file.path);
+				const timer = this.embeddingTimers.get(file.path);
+				if (timer) { clearTimeout(timer); this.embeddingTimers.delete(file.path); }
+			})
+		);
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				this.vaultIndex.removeFile(oldPath);
+				void this.vaultIndex.update(file, this.app.vault);
+				this.backlinkIndex.removeFile(oldPath);
+				this.backlinkIndex.update(file.path, this.app);
+				this.semanticIndex.removeFile(oldPath);
+				this.scheduleSemanticUpdate(file.path);
+			})
+		);
+
+		// Warm up indexes in the background so the first search is fast
+		this.vaultIndex.buildInBackground(this.app.vault);
+		this.backlinkIndex.build(this.app);
+		if (this.settings.semanticSearch) {
+			void this.semanticIndex.build(this.app.vault, this.app.vault.adapter);
+		}
+
+		// eslint-disable-next-line obsidianmd/ui/sentence-case
+		this.addRibbonIcon("plug", "MCP Server", () => {
+			if (this.mcpServer?.isRunning()) {
+				void this.stopServer();
+			} else {
+				void this.startServer();
+			}
 		});
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
-
-		// This adds a simple command that can be triggered anywhere
 		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
+			id: "start-mcp-server",
+			// eslint-disable-next-line obsidianmd/commands/no-plugin-name-in-command-name, obsidianmd/ui/sentence-case
+			name: "Start MCP Server",
+			callback: () => void this.startServer(),
+		});
+
+		this.addCommand({
+			id: "stop-mcp-server",
+			// eslint-disable-next-line obsidianmd/commands/no-plugin-name-in-command-name, obsidianmd/ui/sentence-case
+			name: "Stop MCP Server",
+			callback: () => void this.stopServer(),
+		});
+
+		this.addCommand({
+			id: "copy-mcp-url",
+			// eslint-disable-next-line obsidianmd/commands/no-plugin-name-in-command-name, obsidianmd/ui/sentence-case
+			name: "Copy MCP Server URL",
 			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
+				const url = `http://localhost:${this.settings.port}/mcp`;
+				void navigator.clipboard.writeText(url);
+				new Notice(`Copied: ${url}`);
+			},
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-
+		if (this.settings.autoStart) {
+			await this.startServer();
+		}
 	}
 
 	onunload() {
+		void this.stopServer();
+	}
+
+	/** Debounces re-embedding a file by EMBEDDING_DEBOUNCE_MS after the last event. */
+	private scheduleSemanticUpdate(path: string): void {
+		if (!this.settings.semanticSearch) return;
+		const existing = this.embeddingTimers.get(path);
+		if (existing) clearTimeout(existing);
+		const timer = setTimeout(() => {
+			this.embeddingTimers.delete(path);
+			const file = this.app.vault.getFileByPath(path);
+			if (file) {
+				void this.semanticIndex.update(file, this.app.vault, this.app.vault.adapter);
+			}
+		}, EMBEDDING_DEBOUNCE_MS);
+		this.embeddingTimers.set(path, timer);
+	}
+
+	async startServer() {
+		if (this.mcpServer?.isRunning()) return;
+		this.mcpServer = new ObsidianMcpServer(this.app, this.settings, this.vaultIndex, this.backlinkIndex, this.deleteLog, this.semanticIndex);
+
+		// Exponential backoff: 1 s → 2 s → 4 s (max 3 attempts)
+		const maxAttempts = 3;
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			try {
+				await this.mcpServer.start();
+				new Notice(`MCP server started on port ${this.settings.port}`);
+				return;
+			} catch (e) {
+				if (attempt === maxAttempts) {
+					new Notice(`MCP server failed to start: ${e instanceof Error ? e.message : String(e)}`);
+					throw e;
+				}
+				await new Promise<void>((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
+			}
+		}
+	}
+
+	async stopServer() {
+		if (!this.mcpServer?.isRunning()) return;
+		await this.mcpServer.stop();
+		// eslint-disable-next-line obsidianmd/ui/sentence-case
+		new Notice("MCP server stopped");
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
+		this.settings = Object.assign(
+			{},
+			DEFAULT_SETTINGS,
+			(await this.loadData()) as Partial<McpServerSettings>
+		);
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
 	}
 }
