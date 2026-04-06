@@ -179,6 +179,7 @@ export class McpSettingsTab extends PluginSettingTab {
 					text.inputEl.type = "password";
 					text.inputEl.autocomplete = "off";
 					text
+						// eslint-disable-next-line obsidianmd/ui/sentence-case
 						.setPlaceholder("sk-...")
 						.setValue(this.plugin.settings.embeddingApiKey)
 						.onChange(async (value) => {
@@ -192,6 +193,7 @@ export class McpSettingsTab extends PluginSettingTab {
 				.setDesc("Model name to pass to the embedding API.")
 				.addText((text) =>
 					text
+						// eslint-disable-next-line obsidianmd/ui/sentence-case
 						.setPlaceholder("text-embedding-3-small")
 						.setValue(this.plugin.settings.embeddingModel)
 						.onChange(async (value) => {

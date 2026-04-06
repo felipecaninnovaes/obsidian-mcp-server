@@ -1,7 +1,8 @@
+import { requestUrl } from "obsidian";
 import { TFile, Vault } from "obsidian";
 import {
 	BATCH_SIZE,
-	EMBEDDING_STORAGE_PATH,
+	getEmbeddingStoragePath,
 	EMBEDDING_TEXT_MAX_CHARS,
 } from "../constants";
 
@@ -70,7 +71,7 @@ type EmbeddingApiResponse = OpenAiEmbeddingResponse | OllamaEmbedResponse | Olla
  *
  * Embeddings are generated via any OpenAI-compatible `/embeddings` endpoint
  * (OpenAI, Azure OpenAI, Ollama, etc.) and persisted to
- * `.obsidian/plugins/obsidian-mcp-server/embeddings.json`.
+ * `<configDir>/plugins/obsidian-mcp-server/embeddings.json`.
  *
  * Incremental updates: only re-embeds files whose `mtime` changed since the
  * last build, making repeated startups cheap after the initial indexing.
@@ -96,10 +97,10 @@ export class SemanticIndex {
 
 	// ── Persistence ───────────────────────────────────────────────────────────
 
-	async load(adapter: MinimalAdapter): Promise<void> {
+	async load(adapter: MinimalAdapter, storagePath: string): Promise<void> {
 		try {
-			if (!(await adapter.exists(EMBEDDING_STORAGE_PATH))) return;
-			const raw = await adapter.read(EMBEDDING_STORAGE_PATH);
+			if (!(await adapter.exists(storagePath))) return;
+			const raw = await adapter.read(storagePath);
 			const parsed = JSON.parse(raw) as StorageFormat;
 			if (parsed.model === this.config?.model) {
 				this.store = parsed.embeddings;
@@ -112,8 +113,8 @@ export class SemanticIndex {
 		}
 	}
 
-	async save(adapter: MinimalAdapter): Promise<void> {
-		const dir = EMBEDDING_STORAGE_PATH.substring(0, EMBEDDING_STORAGE_PATH.lastIndexOf("/"));
+	async save(adapter: MinimalAdapter, storagePath: string): Promise<void> {
+		const dir = storagePath.substring(0, storagePath.lastIndexOf("/"));
 		if (!(await adapter.exists(dir))) {
 			await adapter.mkdir(dir);
 		}
@@ -121,7 +122,7 @@ export class SemanticIndex {
 			model: this.config?.model ?? "",
 			embeddings: this.store,
 		};
-		await adapter.write(EMBEDDING_STORAGE_PATH, JSON.stringify(data));
+		await adapter.write(storagePath, JSON.stringify(data));
 	}
 
 	// ── Index management ──────────────────────────────────────────────────────
@@ -134,7 +135,8 @@ export class SemanticIndex {
 	 */
 	async build(vault: Vault, adapter: MinimalAdapter): Promise<void> {
 		if (!this.isConfigured()) return;
-		await this.load(adapter);
+		const storagePath = getEmbeddingStoragePath(vault.configDir);
+		await this.load(adapter, storagePath);
 
 		const files = vault.getMarkdownFiles();
 		for (let i = 0; i < files.length; i += BATCH_SIZE) {
@@ -154,7 +156,7 @@ export class SemanticIndex {
 			if (!filePaths.has(path)) delete this.store[path];
 		}
 
-		await this.save(adapter);
+		await this.save(adapter, storagePath);
 	}
 
 	/**
@@ -166,7 +168,7 @@ export class SemanticIndex {
 		const existing = this.store[file.path];
 		if (existing && existing.mtime === file.stat.mtime) return;
 		await this.indexFile(file, vault);
-		await this.save(adapter);
+		await this.save(adapter, getEmbeddingStoragePath(vault.configDir));
 	}
 
 	/** Removes a file's entry from the in-memory store (no disk write; batched via build). */
@@ -257,35 +259,35 @@ export class SemanticIndex {
 			headers["Authorization"] = `Bearer ${this.config.apiKey}`;
 		}
 
-		const response = await fetch(this.config.endpoint, {
+		const response = await requestUrl({
+			url: this.config.endpoint,
 			method: "POST",
 			headers,
 			body: JSON.stringify({ model: this.config.model, input: text }),
+			throw: false,
 		});
 
-		if (!response.ok) {
-			throw new Error(
-				`Embedding API error: ${response.status} ${response.statusText}`
-			);
+		if (response.status < 200 || response.status >= 300) {
+			throw new Error(`Embedding API error: ${response.status}`);
 		}
 
-		const data = (await response.json()) as EmbeddingApiResponse;
+		const data = response.json as EmbeddingApiResponse;
 
 		// OpenAI / v1/embeddings format
 		if ("data" in data && Array.isArray(data.data)) {
-			const embedding = (data as OpenAiEmbeddingResponse).data[0]?.embedding;
+			const embedding = data.data[0]?.embedding;
 			if (embedding && embedding.length > 0) return embedding;
 		}
 
 		// Ollama /api/embed format
 		if ("embeddings" in data && Array.isArray(data.embeddings)) {
-			const embedding = (data as OllamaEmbedResponse).embeddings[0];
+			const embedding = data.embeddings[0];
 			if (embedding && embedding.length > 0) return embedding;
 		}
 
 		// Ollama /api/embeddings (legacy) format
 		if ("embedding" in data && Array.isArray(data.embedding)) {
-			const embedding = (data as OllamaEmbeddingsResponse).embedding;
+			const embedding = data.embedding;
 			if (embedding.length > 0) return embedding;
 		}
 

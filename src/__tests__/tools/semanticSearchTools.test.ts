@@ -27,7 +27,7 @@ function seedStore(idx: SemanticIndex, entries: Array<{ path: string; vector: nu
 		write: async () => {},
 		mkdir: async () => {},
 	};
-	return idx.load(adapter);
+	return idx.load(adapter, "any/path");
 }
 
 // ── isConfigured guard ────────────────────────────────────────────────────────

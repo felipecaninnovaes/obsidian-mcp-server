@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SemanticIndex } from "../server/SemanticIndex";
 import type { MinimalAdapter } from "../server/SemanticIndex";
+import { getEmbeddingStoragePath } from "../constants";
+
+// eslint-disable-next-line obsidianmd/hardcoded-config-path
+const TEST_CONFIG_DIR = ".obsidian";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -16,6 +20,7 @@ function makeAdapter(store: Record<string, string> = {}): MinimalAdapter {
 
 function makeVault(files: Array<{ path: string; basename: string; mtime: number; content: string }>) {
 	return {
+		configDir: TEST_CONFIG_DIR,
 		getMarkdownFiles: () =>
 			files.map((f) => ({
 				path: f.path,
@@ -41,6 +46,7 @@ function makeConfig() {
 function mockFetch(vector: number[]) {
 	return vi.fn().mockResolvedValue({
 		ok: true,
+		status: 200,
 		json: async () => ({ data: [{ embedding: vector }] }),
 	});
 }
@@ -160,7 +166,7 @@ describe("SemanticIndex load/save", () => {
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
 		const adapter = makeAdapter(); // empty fs
-		await idx.load(adapter);
+		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
 		// search returns [] without calling the embedding API
 		// (no stored entries, so results is empty before API call)
 		expect(idx.isConfigured()).toBe(true);
@@ -178,11 +184,11 @@ describe("SemanticIndex load/save", () => {
 			},
 		});
 		const adapter = makeAdapter({
-			".obsidian/plugins/obsidian-mcp-server/embeddings.json": storedData,
+			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
 		});
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
-		await idx.load(adapter);
+		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
 
 		// After loading, search should rank against stored vectors without hitting the API
 		const fetchMock = mockFetch([0.1, 0.9]);
@@ -205,11 +211,11 @@ describe("SemanticIndex load/save", () => {
 			},
 		});
 		const adapter = makeAdapter({
-			".obsidian/plugins/obsidian-mcp-server/embeddings.json": storedData,
+			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
 		});
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig()); // different model
-		await idx.load(adapter);
+		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
 
 		const fetchMock = mockFetch([0.5, 0.5]);
 		vi.stubGlobal("fetch", fetchMock);
@@ -243,7 +249,7 @@ describe("SemanticIndex load/save", () => {
 		// Reload into a fresh index
 		const idx2 = new SemanticIndex();
 		idx2.configure(makeConfig());
-		await idx2.load(adapter);
+		await idx2.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
 
 		const fetchMock2 = mockFetch([1, 0, 0]);
 		vi.stubGlobal("fetch", fetchMock2);
@@ -258,11 +264,11 @@ describe("SemanticIndex load/save", () => {
 
 	it("handles corrupt storage file gracefully", async () => {
 		const adapter = makeAdapter({
-			".obsidian/plugins/obsidian-mcp-server/embeddings.json": "not valid json{{{",
+			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: "not valid json{{{",
 		});
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
-		await expect(idx.load(adapter)).resolves.not.toThrow();
+		await expect(idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR))).resolves.not.toThrow();
 		expect(idx.isConfigured()).toBe(true);
 	});
 });
@@ -334,7 +340,7 @@ describe("SemanticIndex.build()", () => {
 			},
 		});
 		const adapter = makeAdapter({
-			".obsidian/plugins/obsidian-mcp-server/embeddings.json": storedData,
+			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
 		});
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
@@ -362,7 +368,7 @@ describe("SemanticIndex.build()", () => {
 			},
 		});
 		const adapter = makeAdapter({
-			".obsidian/plugins/obsidian-mcp-server/embeddings.json": storedData,
+			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
 		});
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
@@ -390,7 +396,7 @@ describe("SemanticIndex.build()", () => {
 			},
 		});
 		const adapter = makeAdapter({
-			".obsidian/plugins/obsidian-mcp-server/embeddings.json": storedData,
+			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
 		});
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
@@ -439,11 +445,11 @@ describe("SemanticIndex.search()", () => {
 			},
 		});
 		const adapter = makeAdapter({
-			".obsidian/plugins/obsidian-mcp-server/embeddings.json": storedData,
+			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
 		});
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
-		await idx.load(adapter);
+		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
 
 		// Query vector aligned with [1, 0] → "high.md" should rank first
 		const fetchMock = mockFetch([1, 0]);
@@ -470,11 +476,11 @@ describe("SemanticIndex.search()", () => {
 			),
 		});
 		const adapter = makeAdapter({
-			".obsidian/plugins/obsidian-mcp-server/embeddings.json": storedData,
+			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
 		});
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
-		await idx.load(adapter);
+		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
 
 		const fetchMock = mockFetch([0.5, 0.5]);
 		vi.stubGlobal("fetch", fetchMock);
@@ -508,11 +514,11 @@ describe("SemanticIndex.search()", () => {
 			},
 		});
 		const adapter = makeAdapter({
-			".obsidian/plugins/obsidian-mcp-server/embeddings.json": storedData,
+			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
 		});
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
-		await idx.load(adapter);
+		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
 
 		const fetchMock = mockFetch([1, 0]);
 		vi.stubGlobal("fetch", fetchMock);
@@ -532,6 +538,7 @@ describe("SemanticIndex.search()", () => {
 			ok: false,
 			status: 401,
 			statusText: "Unauthorized",
+			json: async () => null,
 		});
 		vi.stubGlobal("fetch", fetchMock);
 		try {
@@ -547,6 +554,7 @@ describe("SemanticIndex.search()", () => {
 
 		const fetchMock = vi.fn().mockResolvedValue({
 			ok: true,
+			status: 200,
 			json: async () => ({ data: [] }),
 		});
 		vi.stubGlobal("fetch", fetchMock);
@@ -565,15 +573,16 @@ describe("SemanticIndex.search()", () => {
 			},
 		});
 		const adapter = makeAdapter({
-			".obsidian/plugins/obsidian-mcp-server/embeddings.json": storedData,
+			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
 		});
 		const idx = new SemanticIndex();
 		idx.configure({ endpoint: "http://localhost:11434/api/embed", apiKey: "", model: "nomic-embed-text" });
-		await idx.load(adapter);
+		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
 
 		// Ollama /api/embed response
 		const fetchMock = vi.fn().mockResolvedValue({
 			ok: true,
+			status: 200,
 			json: async () => ({ embeddings: [[1, 0]] }),
 		});
 		vi.stubGlobal("fetch", fetchMock);
@@ -594,15 +603,16 @@ describe("SemanticIndex.search()", () => {
 			},
 		});
 		const adapter = makeAdapter({
-			".obsidian/plugins/obsidian-mcp-server/embeddings.json": storedData,
+			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
 		});
 		const idx = new SemanticIndex();
 		idx.configure({ endpoint: "http://localhost:11434/api/embeddings", apiKey: "", model: "nomic-embed-text" });
-		await idx.load(adapter);
+		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
 
 		// Ollama /api/embeddings legacy response
 		const fetchMock = vi.fn().mockResolvedValue({
 			ok: true,
+			status: 200,
 			json: async () => ({ embedding: [1, 0] }),
 		});
 		vi.stubGlobal("fetch", fetchMock);
@@ -622,6 +632,7 @@ describe("SemanticIndex.search()", () => {
 
 		const fetchMock = vi.fn().mockResolvedValue({
 			ok: true,
+			status: 200,
 			json: async () => ({ embeddings: [[0.5, 0.5]] }),
 		});
 		vi.stubGlobal("fetch", fetchMock);
@@ -656,7 +667,7 @@ describe("SemanticIndex.update()", () => {
 		idx.configure(makeConfig());
 
 		const file = { path: "new.md", basename: "new", stat: { mtime: 100 } };
-		const vault = { cachedRead: async () => "New content here." };
+		const vault = { configDir: TEST_CONFIG_DIR, cachedRead: async () => "New content here." };
 
 		const fetchMock = mockFetch([0.3, 0.7]);
 		vi.stubGlobal("fetch", fetchMock);
@@ -679,14 +690,14 @@ describe("SemanticIndex.update()", () => {
 			},
 		});
 		const cachedAdapter = makeAdapter({
-			".obsidian/plugins/obsidian-mcp-server/embeddings.json": storedData,
+			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
 		});
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
-		await idx.load(cachedAdapter);
+		await idx.load(cachedAdapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
 
 		const file = { path: "existing.md", basename: "existing", stat: { mtime: 50 } };
-		const vault = { cachedRead: async () => "Same content." };
+		const vault = { configDir: TEST_CONFIG_DIR, cachedRead: async () => "Same content." };
 		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
 
@@ -698,7 +709,7 @@ describe("SemanticIndex.update()", () => {
 	it("does nothing when not configured", async () => {
 		const idx = new SemanticIndex();
 		const file = { path: "f.md", basename: "f", stat: { mtime: 1 } };
-		const vault = { cachedRead: async () => "content" };
+		const vault = { configDir: TEST_CONFIG_DIR, cachedRead: async () => "content" };
 		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
 

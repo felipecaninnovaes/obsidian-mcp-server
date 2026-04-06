@@ -28,3 +28,35 @@ export const moment = () => ({});
 export class MetadataCache {}
 
 export class DataAdapter {}
+
+/**
+ * Mock requestUrl that proxies to the global `fetch` so tests can stub it.
+ * This preserves the existing `vi.stubGlobal("fetch", ...)` test pattern.
+ */
+export const requestUrl = async (params: {
+	url: string;
+	method?: string;
+	headers?: Record<string, string>;
+	body?: string;
+	throw?: boolean;
+}): Promise<{ status: number; headers: Record<string, string>; json: unknown; text: string; arrayBuffer: ArrayBuffer }> => {
+	// eslint-disable-next-line no-restricted-globals
+	const response = await fetch(params.url, {
+		method: params.method ?? "GET",
+		headers: params.headers,
+		body: params.body,
+	});
+	let json: unknown = null;
+	try {
+		json = await response.json();
+	} catch {
+		json = null;
+	}
+	return {
+		status: response.status,
+		headers: {},
+		json,
+		text: "",
+		arrayBuffer: new ArrayBuffer(0),
+	};
+};

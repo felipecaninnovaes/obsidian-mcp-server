@@ -6,7 +6,6 @@ import { SEMANTIC_SEARCH_DEFAULT, SEMANTIC_SEARCH_MAX } from "../../constants";
 
 export function registerSemanticSearchTools(
 	server: McpServer,
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	_app: App,
 	semanticIndex: SemanticIndex
 ): void {

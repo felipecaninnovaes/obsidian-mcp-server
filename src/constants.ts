@@ -27,8 +27,10 @@ export const REGEX_MATCH_LIMIT = 1_000;
 
 /** Debounce delay before re-embedding a modified file (ms). */
 export const EMBEDDING_DEBOUNCE_MS = 5_000;
-/** Vault-relative path for the embeddings persistence file. */
-export const EMBEDDING_STORAGE_PATH = ".obsidian/plugins/obsidian-mcp-server/embeddings.json";
+/** Returns the vault-absolute path for the embeddings persistence file. */
+export function getEmbeddingStoragePath(configDir: string): string {
+	return `${configDir}/plugins/obsidian-mcp-server/embeddings.json`;
+}
 /** Max characters of (title + first paragraph) sent to the embedding API. */
 export const EMBEDDING_TEXT_MAX_CHARS = 500;
 /** Default number of semantic search results. */
