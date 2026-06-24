@@ -102,11 +102,11 @@ export class ObsidianMcpServer {
 
 		// eslint-disable-next-line @typescript-eslint/no-misused-promises
 		this.httpServer = http.createServer(async (req, res) => {
-			// Restrict CORS to localhost origins only
-			const origin = req.headers["origin"];
-			if (origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
-				res.setHeader("Access-Control-Allow-Origin", origin);
-			}
+			console.log(`[MCP Server Debug] Incoming Request: ${req.method} ${req.url}`);
+			console.log(`[MCP Server Debug] Headers:`, req.headers);
+
+			// Allow CORS for all origins to accept connections from Docker (AnythingLLM)
+			res.setHeader("Access-Control-Allow-Origin", "*");
 			res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
 			res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id");
 			res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
@@ -165,18 +165,24 @@ export class ObsidianMcpServer {
 				}
 			}
 
-			if (req.url === "/mcp" || req.url?.startsWith("/mcp?")) {
+			const pathname = req.url ? new URL(req.url, `http://localhost`).pathname : "";
+
+			if (pathname === "/mcp" || pathname === "/mcp/") {
+				if (req.method === "GET" && req.headers["accept"]?.includes("text/event-stream")) {
+					await this.handleSseConnect(req, res);
+					return;
+				}
 				await this.handleMcpRequest(req, res);
 				return;
 			}
 
 			// SSE transport endpoints (legacy — required by Claude Desktop)
-			if (req.url === "/sse" && req.method === "GET") {
+			if (pathname === "/sse" && req.method === "GET") {
 				await this.handleSseConnect(req, res);
 				return;
 			}
 
-			if (req.url?.startsWith("/messages") && req.method === "POST") {
+			if (pathname === "/messages" && req.method === "POST") {
 				await this.handleSseMessage(req, res);
 				return;
 			}
