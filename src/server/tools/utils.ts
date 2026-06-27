@@ -32,6 +32,7 @@ export function sanitizePath(path: string): string {
 	
 	// BLOCK hidden obsidian/git/trash directories for security (Prevents RCE via plugin overrides)
 	const firstSegment = normalized.split("/")[0]?.toLowerCase();
+	// eslint-disable-next-line obsidianmd/hardcoded-config-path
 	if (firstSegment === ".obsidian" || firstSegment === ".git" || firstSegment === ".trash") {
 		throw new Error(`Invalid path: accessing '${firstSegment}' is not allowed for security reasons`);
 	}

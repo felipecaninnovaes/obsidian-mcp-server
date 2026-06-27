@@ -122,7 +122,7 @@ export class ObsidianMcpServer {
 					if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || allowedOrigins.includes(origin)) {
 						return callback(null, true);
 					}
-				} catch (e) {
+				} catch {
 					// Ignore invalid origins
 				}
 				
@@ -391,7 +391,7 @@ export class ObsidianMcpServer {
 		if (this.httpServer) {
 			// Force close all lingering keep-alive connections
 			if ("closeAllConnections" in this.httpServer) {
-				(this.httpServer as any).closeAllConnections();
+				(this.httpServer as http.Server & { closeAllConnections(): void }).closeAllConnections();
 			}
 			await new Promise<void>((resolve) => {
 				this.httpServer!.close(() => resolve());

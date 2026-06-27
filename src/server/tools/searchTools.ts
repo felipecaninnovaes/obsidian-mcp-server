@@ -1,4 +1,4 @@
-import { App } from "obsidian";
+import { App, TFile } from "obsidian";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sanitizePath, MAX_PATH_LENGTH } from "./utils";
@@ -70,7 +70,7 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 			};
 			const results: SearchResult[] = [];
 
-			async function performTokenSearch(filesToSearch: any[], isFallback = false) {
+			async function performTokenSearch(filesToSearch: TFile[], isFallback = false) {
 				for (let i = 0; i < filesToSearch.length; i += BATCH_SIZE) {
 					const batch = filesToSearch.slice(i, i + BATCH_SIZE);
 					const items = await Promise.all(
