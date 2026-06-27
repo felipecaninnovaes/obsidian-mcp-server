@@ -23,6 +23,14 @@ The plugin exposes the following MCP tools to connected clients:
 
 ---
 
+## Architecture Overview
+
+Most standalone MCP servers use `stdio` for transport, requiring the client to spawn the server as a subprocess. Since Obsidian is the main application process and plugins cannot be launched as separate standalone processes by an IDE, this plugin uses **Streamable HTTP**.
+
+The plugin runs a local HTTP server directly inside Obsidian. AI clients connect to this server via an HTTP URL (e.g., `http://localhost:27123/mcp`) using Server-Sent Events (SSE) or Streamable HTTP. This allows secure, cross-process communication between your IDE and your vault.
+
+---
+
 ## Installation
 
 ### From GitHub Releases (recommended)
@@ -38,40 +46,6 @@ The plugin exposes the following MCP tools to connected clients:
 ### BRAT (beta testing)
 
 Install [BRAT](https://github.com/TfTHacker/obsidian42-brat) and add this repository URL to test pre-release builds.
-
----
-
-## Building from Source
-
-### Prerequisites
-
-- [Node.js](https://nodejs.org) 18 LTS or later
-- npm (bundled with Node.js)
-
-### Steps
-
-```bash
-# Clone the repository
-git clone https://github.com/felipecn/obsidian-mcp-server.git
-cd obsidian-mcp-server
-
-# Install dependencies
-npm install
-
-# Development build (watch mode — rebuilds on file changes)
-npm run dev
-
-# Production build (type-checked, minified)
-npm run build
-```
-
-The production build outputs `main.js` at the project root. Copy `main.js`, `manifest.json`, and `styles.css` into your vault's plugin folder to test locally.
-
-### Linting
-
-```bash
-npm run lint
-```
 
 ---
 
@@ -91,33 +65,23 @@ The **API Key** is auto-generated on first load. Copy it from the settings tab u
 
 ---
 
-## Connecting an MCP Client
+## Connecting MCP Clients
 
-Once the server is running, it is available at:
+Once the server is running, it is available at `http://localhost:27123/mcp`. You must pass your API key as a Bearer token in the `Authorization` header.
 
-```
-http://localhost:27123/mcp
-```
+### Claude Desktop
 
-Pass the API key as a `Bearer` token in the `Authorization` header:
+Claude Desktop only supports `stdio` transport natively. To connect it to an HTTP MCP server, use [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) as a proxy.
 
-```
-Authorization: Bearer <your-api-key>
-```
-
-### Example — Claude Desktop (`claude_desktop_config.json`)
-
-Claude Desktop only supports stdio transport. Use [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) as a proxy.
-
-**Step 1 — install `mcp-remote` globally** (one-time):
-
+**Step 1 — Install `mcp-remote` globally** (one-time):
 ```bash
 npm install -g mcp-remote
 ```
+*(Windows note: Installing globally avoids issues if Node.js is installed in a path with spaces).*
 
-> **Windows note:** do not use `npx mcp-remote`. If Node.js is installed in a path with spaces (e.g. `D:\Program Files\nodejs`), Claude Desktop will fail to launch `npx` correctly. Installing globally avoids this.
-
-**Step 2 — add to `claude_desktop_config.json`:**
+**Step 2 — Add to your Claude Desktop configuration**:
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
@@ -134,9 +98,38 @@ npm install -g mcp-remote
 }
 ```
 
-> **No authentication?** If you disable *Require authentication* in the plugin settings, omit the `--header` arguments. Only do this if *Network access* is also off.
+### Cursor
 
-### Example — Claude Code / other Streamable HTTP clients
+Create or edit the **`.cursor/mcp.json`** file in the root of your project:
+
+```json
+{
+  "mcpServers": {
+    "obsidian": {
+      "transport": {
+        "type": "http",
+        "url": "http://localhost:27123/mcp",
+        "headers": {
+          "Authorization": "Bearer <your-api-key>"
+        }
+      }
+    }
+  }
+}
+```
+
+### VS Code (Cline / Roo Code)
+
+In your extension settings for Cline or Roo Code, add an MCP server of type **HTTP** with the URL `http://localhost:27123/mcp` and include the Authorization header with your API key.
+
+### Claude Code (CLI)
+
+```bash
+claude mcp add --transport http obsidian http://localhost:27123/mcp \
+  --header "Authorization: Bearer <your-api-key>"
+```
+
+### Other Streamable HTTP Clients
 
 ```json
 {
@@ -151,7 +144,20 @@ npm install -g mcp-remote
 }
 ```
 
-### Health check
+---
+
+## Testing & Troubleshooting
+
+### MCP Inspector
+
+You can test the server interactively using the official MCP Inspector:
+
+```bash
+npx @modelcontextprotocol/inspector http://localhost:27123/mcp
+```
+*Note: You may need to temporarily disable "Require authentication" in Obsidian settings to use the inspector easily.*
+
+### Health Check
 
 ```
 GET http://localhost:27123/health
@@ -178,8 +184,28 @@ The ribbon icon (plug) also toggles the server on/off.
 - By default the server binds to `127.0.0.1` (localhost only).
 - Authentication is **enabled by default**. Disabling it is only safe if `Network access` is also off.
 - Enabling `Network access` without authentication is blocked at startup.
-- CORS is restricted to `localhost` and `127.0.0.1` origins.
+- CORS is restricted to allow secure connections from local tools.
 - All vault paths are validated and sanitized — absolute paths and directory traversal (`../`) are rejected.
+
+---
+
+## Building from Source
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org) 18 LTS or later
+- npm (bundled with Node.js)
+
+### Steps
+
+```bash
+git clone https://github.com/felipecn/obsidian-mcp-server.git
+cd obsidian-mcp-server
+npm install
+npm run dev # Watch mode for development
+npm run build # Production build
+npm run lint # Linting
+```
 
 ---
 
