@@ -28,8 +28,8 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 		"search_vault",
 		{
 			description:
-				"Busca por texto em todas as notas do vault. " +
-				"Modo 'phrase' (padrão): substring exata, resultados ordenados por score TF-IDF. " +
+				"Busca texto em todas as notas do vault (pesquisa no CONTEÚDO e no TÍTULO dos arquivos). " +
+				"Modo 'phrase' (padrão): substring exata, resultados ordenados por score. " +
 				"Modo 'tokens': todos os termos devem aparecer na nota, em qualquer ordem. " +
 				"Modo 'regex': expressão regular JavaScript (máx 200 chars na query). " +
 				"Suporta paginação via offset/limit.",
@@ -146,7 +146,11 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 				const filesToSearch =
 					candidates === null
 						? allFiles
-						: allFiles.filter((f) => candidates.has(f.path));
+						: allFiles.filter((f) => {
+								const nameLower = f.name.toLowerCase();
+								const nameMatch = queryTokens.every((t) => nameLower.includes(t));
+								return nameMatch || candidates.has(f.path);
+						  });
 
 				for (let i = 0; i < filesToSearch.length; i += BATCH_SIZE) {
 					const batch = filesToSearch.slice(i, i + BATCH_SIZE);
@@ -154,21 +158,26 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 						batch.map(async (file) => ({ file, content: await app.vault.cachedRead(file) }))
 					);
 					for (const { file, content } of items) {
+						const nameLower = file.name.toLowerCase();
+						const nameMatch = queryTokens.every((t) => nameLower.includes(t));
+						
 						const firstToken = queryTokens.find((t) => t.length >= 2) ?? queryLower;
 						const searchIn = case_sensitive ? content : content.toLowerCase();
 						const idx = searchIn.indexOf(case_sensitive ? firstToken : firstToken.toLowerCase());
+						
 						const excerpt = idx !== -1
 							? buildSmartExcerpt(content, idx, firstToken.length)
-							: content.slice(0, 160).replace(/\n/g, " ");
+							: (nameMatch ? "(Correspondência no título do arquivo)" : content.slice(0, 160).replace(/\n/g, " "));
+							
 						const score = computeScore({
 							content,
 							queryLower,
-							matchCount: 1,
+							matchCount: nameMatch ? 10 : 1, // Boost if title matches
 							totalDocs,
 							docsWithTerm,
 							mtime: file.stat.mtime,
 						});
-						results.push({ path: file.path, score, excerpt, match_type: "tokens" });
+						results.push({ path: file.path, score, excerpt, match_type: nameMatch ? "title/tokens" : "tokens" });
 					}
 				}
 			} else {
@@ -180,7 +189,10 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 				const filesToSearch =
 					candidates === null
 						? allFiles
-						: allFiles.filter((f) => candidates.has(f.path));
+						: allFiles.filter((f) => {
+								const nameMatch = case_sensitive ? f.name.includes(searchFor) : f.name.toLowerCase().includes(searchFor);
+								return nameMatch || candidates.has(f.path);
+						  });
 
 				for (let i = 0; i < filesToSearch.length; i += BATCH_SIZE) {
 					const batch = filesToSearch.slice(i, i + BATCH_SIZE);
@@ -189,7 +201,9 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 					);
 					for (const { file, content } of items) {
 						const searchIn = case_sensitive ? content : content.toLowerCase();
-						if (!searchIn.includes(searchFor)) continue;
+						const nameMatch = case_sensitive ? file.name.includes(searchFor) : file.name.toLowerCase().includes(searchFor);
+
+						if (!searchIn.includes(searchFor) && !nameMatch) continue;
 
 						// Count occurrences
 						let matchCount = 0;
@@ -199,8 +213,10 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 							pos += searchFor.length;
 						}
 
+						if (nameMatch) matchCount += 10; // Boost score if title matches
+
 						const idx = searchIn.indexOf(searchFor);
-						const excerpt = buildSmartExcerpt(content, idx, query.length);
+						const excerpt = idx !== -1 ? buildSmartExcerpt(content, idx, query.length) : "(Correspondência no título do arquivo)";
 						const score = computeScore({
 							content,
 							queryLower,
@@ -209,36 +225,46 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 							docsWithTerm,
 							mtime: file.stat.mtime,
 						});
-						results.push({ path: file.path, score, excerpt, match_type: "phrase" });
+						results.push({ path: file.path, score, excerpt, match_type: nameMatch ? "title/phrase" : "phrase" });
 					}
 				}
 
 				// Auto-fallback to token search when phrase finds nothing
 				if (results.length === 0) {
 					const tokenCandidates = await vaultIndex.getCandidates(query, app.vault);
-					if (tokenCandidates && tokenCandidates.size > 0) {
-						const tokenFiles = allFiles.filter((f) => tokenCandidates.has(f.path));
+					const tokenFiles = allFiles.filter((f) => {
+						const nameLower = f.name.toLowerCase();
+						const nameMatch = queryTokens.every((t) => nameLower.includes(t));
+						return nameMatch || tokenCandidates?.has(f.path);
+					});
+					
+					if (tokenFiles.length > 0) {
 						for (let i = 0; i < tokenFiles.length; i += BATCH_SIZE) {
 							const batch = tokenFiles.slice(i, i + BATCH_SIZE);
 							const items = await Promise.all(
 								batch.map(async (file) => ({ file, content: await app.vault.cachedRead(file) }))
 							);
 							for (const { file, content } of items) {
+								const nameLower = file.name.toLowerCase();
+								const nameMatch = queryTokens.every((t) => nameLower.includes(t));
+								
 								const firstToken = queryTokens.find((t) => t.length >= 2) ?? queryLower;
 								const searchIn = case_sensitive ? content : content.toLowerCase();
 								const idx = searchIn.indexOf(firstToken);
+								
 								const excerpt = idx !== -1
 									? buildSmartExcerpt(content, idx, firstToken.length)
-									: content.slice(0, 160).replace(/\n/g, " ");
+									: (nameMatch ? "(Correspondência no título do arquivo)" : content.slice(0, 160).replace(/\n/g, " "));
+									
 								const score = computeScore({
 									content,
 									queryLower,
-									matchCount: 1,
+									matchCount: nameMatch ? 10 : 1, // Boost if title matches
 									totalDocs,
 									docsWithTerm,
 									mtime: file.stat.mtime,
 								});
-								results.push({ path: file.path, score, excerpt, match_type: "tokens_fallback" });
+								results.push({ path: file.path, score, excerpt, match_type: nameMatch ? "title/tokens_fallback" : "tokens_fallback" });
 							}
 						}
 					}
@@ -305,7 +331,7 @@ function registerQueryVault(server: McpServer, app: App, vaultIndex: VaultIndex)
 					.string()
 					.max(MAX_PATH_LENGTH)
 					.optional()
-					.describe("Retorna só notas dentro desta pasta. Ex: \"Projetos/2026\""),
+					.describe("Filtra notas por pasta ou prefixo. Case-insensitive e acha subpastas aninhadas (ex: 'Notas pessoais' acha em qualquer lugar da árvore)."),
 				modified_after: z
 					.string()
 					.optional()
@@ -363,9 +389,15 @@ function registerQueryVault(server: McpServer, app: App, vaultIndex: VaultIndex)
 			const results: QueryResult[] = [];
 
 			for (const file of app.vault.getMarkdownFiles()) {
-				// Filter: path_prefix
+				// Filter: path_prefix (case-insensitive and matches subfolders/files)
 				if (normalizedPrefix) {
-					if (!file.path.startsWith(normalizedPrefix + "/") && file.path !== normalizedPrefix) continue;
+					const pathLower = file.path.toLowerCase();
+					const prefixLower = normalizedPrefix.toLowerCase();
+					
+					const isFolderMatch = pathLower.startsWith(prefixLower + "/") || pathLower.includes("/" + prefixLower + "/");
+					const isFileMatch = pathLower === prefixLower || pathLower === prefixLower + ".md" || pathLower.endsWith("/" + prefixLower + ".md");
+
+					if (!isFolderMatch && !isFileMatch) continue;
 				}
 
 				// Filter: modified_after / modified_before
