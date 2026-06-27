@@ -2,7 +2,7 @@ import { requestUrl } from "obsidian";
 import { TFile, Vault } from "obsidian";
 import {
 	BATCH_SIZE,
-	getEmbeddingStoragePath,
+	getEmbeddingStorageDir,
 	EMBEDDING_TEXT_MAX_CHARS,
 } from "../constants";
 
@@ -16,6 +16,8 @@ export interface MinimalAdapter {
 	read(path: string): Promise<string>;
 	write(path: string, data: string): Promise<void>;
 	mkdir(path: string): Promise<void>;
+	list(path: string): Promise<{ files: string[]; folders: string[] }>;
+	remove(path: string): Promise<void>;
 }
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -41,9 +43,8 @@ export interface SemanticSearchResult {
 
 // ── Internal storage format ───────────────────────────────────────────────────
 
-interface StorageFormat {
+interface MetadataFormat {
 	model: string;
-	embeddings: Record<string, EmbeddingEntry>;
 }
 
 // ── Embedding API response types ─────────────────────────────────────────────
@@ -71,13 +72,14 @@ type EmbeddingApiResponse = OpenAiEmbeddingResponse | OllamaEmbedResponse | Olla
  *
  * Embeddings are generated via any OpenAI-compatible `/embeddings` endpoint
  * (OpenAI, Azure OpenAI, Ollama, etc.) and persisted to
- * `<configDir>/plugins/obsidian-mcp-server/embeddings.json`.
+ * `<configDir>/plugins/obsidian-mcp-server/embeddings` (sharded JSON files).
  *
  * Incremental updates: only re-embeds files whose `mtime` changed since the
  * last build, making repeated startups cheap after the initial indexing.
  */
 export class SemanticIndex {
 	private store: Record<string, EmbeddingEntry> = {};
+	private dirtyShards = new Set<string>();
 	private config: EmbeddingConfig | null = null;
 
 	// ── Configuration ─────────────────────────────────────────────────────────
@@ -95,34 +97,95 @@ export class SemanticIndex {
 		);
 	}
 
+	private getShardId(path: string): string {
+		let hash = 5381;
+		for (let i = 0; i < path.length; i++) {
+			hash = (hash * 33) ^ path.charCodeAt(i);
+		}
+		return ((hash >>> 0) % 256).toString(16).padStart(2, "0");
+	}
+
 	// ── Persistence ───────────────────────────────────────────────────────────
 
-	async load(adapter: MinimalAdapter, storagePath: string): Promise<void> {
+	async load(adapter: MinimalAdapter, storageDir: string): Promise<void> {
+		this.store = {};
+		this.dirtyShards.clear();
+
 		try {
-			if (!(await adapter.exists(storagePath))) return;
-			const raw = await adapter.read(storagePath);
-			const parsed = JSON.parse(raw) as StorageFormat;
-			if (parsed.model === this.config?.model) {
-				this.store = parsed.embeddings;
-			} else {
+			if (!(await adapter.exists(storageDir))) return;
+
+			const metadataPath = `${storageDir}/metadata.json`;
+			if (!(await adapter.exists(metadataPath))) {
+				// No metadata, consider stale
+				return;
+			}
+
+			const rawMetadata = await adapter.read(metadataPath);
+			const metadata = JSON.parse(rawMetadata) as MetadataFormat;
+
+			if (metadata.model !== this.config?.model) {
 				// Model changed — discard stale vectors
-				this.store = {};
+				const listed = await adapter.list(storageDir);
+				for (const file of listed.files) {
+					await adapter.remove(file).catch(() => {});
+				}
+				return;
+			}
+
+			const listed = await adapter.list(storageDir);
+			for (const file of listed.files) {
+				if (file.endsWith("metadata.json")) continue;
+				try {
+					const raw = await adapter.read(file);
+					const shardData = JSON.parse(raw) as Record<string, EmbeddingEntry>;
+					Object.assign(this.store, shardData);
+				} catch {
+					// Ignore corrupted shard
+				}
 			}
 		} catch {
 			this.store = {};
 		}
 	}
 
-	async save(adapter: MinimalAdapter, storagePath: string): Promise<void> {
-		const dir = storagePath.substring(0, storagePath.lastIndexOf("/"));
-		if (!(await adapter.exists(dir))) {
-			await adapter.mkdir(dir);
+	async save(adapter: MinimalAdapter, storageDir: string): Promise<void> {
+		if (!(await adapter.exists(storageDir))) {
+			await adapter.mkdir(storageDir);
 		}
-		const data: StorageFormat = {
-			model: this.config?.model ?? "",
-			embeddings: this.store,
-		};
-		await adapter.write(storagePath, JSON.stringify(data));
+
+		const metadataPath = `${storageDir}/metadata.json`;
+		if (!(await adapter.exists(metadataPath))) {
+			await adapter.write(metadataPath, JSON.stringify({ model: this.config?.model ?? "" }));
+		}
+
+		if (this.dirtyShards.size === 0) return;
+
+		// Group store entries by shard to write
+		const shardContents: Record<string, Record<string, EmbeddingEntry>> = {};
+		for (const shard of this.dirtyShards) {
+			shardContents[shard] = {};
+		}
+
+		for (const [path, entry] of Object.entries(this.store)) {
+			const shard = this.getShardId(path);
+			if (this.dirtyShards.has(shard)) {
+				shardContents[shard]![path] = entry;
+			}
+		}
+
+		for (const shard of this.dirtyShards) {
+			const shardPath = `${storageDir}/${shard}.json`;
+			const entries = shardContents[shard]!;
+			if (Object.keys(entries).length === 0) {
+				if (await adapter.exists(shardPath)) {
+					await adapter.remove(shardPath);
+				}
+			} else {
+				await adapter.write(shardPath, JSON.stringify(entries));
+			}
+		}
+
+		this.dirtyShards.clear();
 	}
 
 	// ── Index management ──────────────────────────────────────────────────────
@@ -135,8 +198,8 @@ export class SemanticIndex {
 	 */
 	async build(vault: Vault, adapter: MinimalAdapter): Promise<void> {
 		if (!this.isConfigured()) return;
-		const storagePath = getEmbeddingStoragePath(vault.configDir);
-		await this.load(adapter, storagePath);
+		const storageDir = getEmbeddingStorageDir(vault.configDir);
+		await this.load(adapter, storageDir);
 
 		const files = vault.getMarkdownFiles();
 		for (let i = 0; i < files.length; i += BATCH_SIZE) {
@@ -153,10 +216,12 @@ export class SemanticIndex {
 		// Remove entries for files that no longer exist in the vault
 		const filePaths = new Set(files.map((f) => f.path));
 		for (const path of Object.keys(this.store)) {
-			if (!filePaths.has(path)) delete this.store[path];
+			if (!filePaths.has(path)) {
+				this.removeFile(path);
+			}
 		}
 
-		await this.save(adapter, storagePath);
+		await this.save(adapter, storageDir);
 	}
 
 	/**
@@ -168,12 +233,15 @@ export class SemanticIndex {
 		const existing = this.store[file.path];
 		if (existing && existing.mtime === file.stat.mtime) return;
 		await this.indexFile(file, vault);
-		await this.save(adapter, getEmbeddingStoragePath(vault.configDir));
+		await this.save(adapter, getEmbeddingStorageDir(vault.configDir));
 	}
 
 	/** Removes a file's entry from the in-memory store (no disk write; batched via build). */
 	removeFile(path: string): void {
-		delete this.store[path];
+		if (this.store[path]) {
+			delete this.store[path];
+			this.dirtyShards.add(this.getShardId(path));
+		}
 	}
 
 	// ── Search ────────────────────────────────────────────────────────────────
@@ -246,6 +314,7 @@ export class SemanticIndex {
 		try {
 			const vector = await this.embed(text);
 			this.store[file.path] = { vector, mtime: file.stat.mtime, preview };
+			this.dirtyShards.add(this.getShardId(file.path));
 		} catch {
 			// Skip files that fail to embed (transient API errors, etc.)
 		}

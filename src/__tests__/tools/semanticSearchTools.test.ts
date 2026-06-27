@@ -16,16 +16,19 @@ function makeConfig() {
 }
 
 function seedStore(idx: SemanticIndex, entries: Array<{ path: string; vector: number[]; preview: string }>) {
-	// Load pre-built embeddings by invoking load() with a fake adapter
 	const embeddings = Object.fromEntries(
 		entries.map((e) => [e.path, { vector: e.vector, mtime: 1, preview: e.preview }])
 	);
-	const data = JSON.stringify({ model: "text-embedding-3-small", embeddings });
 	const adapter: MinimalAdapter = {
-		exists: async (_p: string) => true,
-		read: async (_p: string) => data,
+		exists: async () => true,
+		read: async (p) => {
+			if (p.endsWith("metadata.json")) return JSON.stringify({ model: "text-embedding-3-small" });
+			return JSON.stringify(embeddings);
+		},
 		write: async () => {},
 		mkdir: async () => {},
+		list: async (p) => ({ files: [p + "/metadata.json", p + "/00.json"], folders: [] }),
+		remove: async () => {},
 	};
 	return idx.load(adapter, "any/path");
 }

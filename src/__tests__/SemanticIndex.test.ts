@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SemanticIndex } from "../server/SemanticIndex";
 import type { MinimalAdapter } from "../server/SemanticIndex";
-import { getEmbeddingStoragePath } from "../constants";
+import { getEmbeddingStorageDir } from "../constants";
 
 // eslint-disable-next-line obsidianmd/hardcoded-config-path
 const TEST_CONFIG_DIR = ".obsidian";
@@ -11,11 +11,26 @@ const TEST_CONFIG_DIR = ".obsidian";
 function makeAdapter(store: Record<string, string> = {}): MinimalAdapter {
 	const fs = { ...store };
 	return {
-		exists: async (p) => p in fs,
+		exists: async (p) => p in fs || Object.keys(fs).some(k => k.startsWith(p + "/")),
 		read: async (p) => fs[p] ?? (() => { throw new Error(`File not found: ${p}`); })(),
 		write: async (p, data) => { fs[p] = data; },
 		mkdir: async () => { /* no-op */ },
+		list: async (p) => {
+			const prefix = p.endsWith("/") ? p : p + "/";
+			const files = Object.keys(fs).filter(k => k.startsWith(prefix) && !k.substring(prefix.length).includes("/"));
+			return { files, folders: [] };
+		},
+		remove: async (p) => { delete fs[p]; },
 	};
+}
+
+function makeAdapterWithEmbeddings(model: string, embeddings: Record<string, unknown>) {
+	const dir = getEmbeddingStorageDir(TEST_CONFIG_DIR);
+	const store: Record<string, string> = {
+		[`${dir}/metadata.json`]: JSON.stringify({ model }),
+		[`${dir}/00.json`]: JSON.stringify(embeddings),
+	};
+	return makeAdapter(store);
 }
 
 function makeVault(files: Array<{ path: string; basename: string; mtime: number; content: string }>) {
@@ -166,29 +181,23 @@ describe("SemanticIndex load/save", () => {
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
 		const adapter = makeAdapter(); // empty fs
-		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
+		await idx.load(adapter, getEmbeddingStorageDir(TEST_CONFIG_DIR));
 		// search returns [] without calling the embedding API
 		// (no stored entries, so results is empty before API call)
 		expect(idx.isConfigured()).toBe(true);
 	});
 
 	it("restores stored entries when model matches", async () => {
-		const storedData = JSON.stringify({
-			model: "text-embedding-3-small",
-			embeddings: {
+		const adapter = makeAdapterWithEmbeddings("text-embedding-3-small", {
 				"note.md": {
 					vector: [0.1, 0.9],
 					mtime: 1000,
 					preview: "preview text",
 				},
-			},
-		});
-		const adapter = makeAdapter({
-			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
-		});
+			},);
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
-		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
+		await idx.load(adapter, getEmbeddingStorageDir(TEST_CONFIG_DIR));
 
 		// After loading, search should rank against stored vectors without hitting the API
 		const fetchMock = mockFetch([0.1, 0.9]);
@@ -204,18 +213,12 @@ describe("SemanticIndex load/save", () => {
 	});
 
 	it("discards stored entries when model does not match", async () => {
-		const storedData = JSON.stringify({
-			model: "old-model",
-			embeddings: {
+		const adapter = makeAdapterWithEmbeddings("old-model", {
 				"note.md": { vector: [0.1, 0.9], mtime: 1000, preview: "x" },
-			},
-		});
-		const adapter = makeAdapter({
-			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
-		});
+			},);
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig()); // different model
-		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
+		await idx.load(adapter, getEmbeddingStorageDir(TEST_CONFIG_DIR));
 
 		const fetchMock = mockFetch([0.5, 0.5]);
 		vi.stubGlobal("fetch", fetchMock);
@@ -249,7 +252,7 @@ describe("SemanticIndex load/save", () => {
 		// Reload into a fresh index
 		const idx2 = new SemanticIndex();
 		idx2.configure(makeConfig());
-		await idx2.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
+		await idx2.load(adapter, getEmbeddingStorageDir(TEST_CONFIG_DIR));
 
 		const fetchMock2 = mockFetch([1, 0, 0]);
 		vi.stubGlobal("fetch", fetchMock2);
@@ -264,11 +267,11 @@ describe("SemanticIndex load/save", () => {
 
 	it("handles corrupt storage file gracefully", async () => {
 		const adapter = makeAdapter({
-			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: "not valid json{{{",
+			[getEmbeddingStorageDir(TEST_CONFIG_DIR)]: "not valid json{{{",
 		});
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
-		await expect(idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR))).resolves.not.toThrow();
+		await expect(idx.load(adapter, getEmbeddingStorageDir(TEST_CONFIG_DIR))).resolves.not.toThrow();
 		expect(idx.isConfigured()).toBe(true);
 	});
 });
@@ -333,15 +336,9 @@ describe("SemanticIndex.build()", () => {
 	});
 
 	it("skips files whose mtime matches the stored entry", async () => {
-		const storedData = JSON.stringify({
-			model: "text-embedding-3-small",
-			embeddings: {
+		const adapter = makeAdapterWithEmbeddings("text-embedding-3-small", {
 				"cached.md": { vector: [1, 0], mtime: 999, preview: "cached" },
-			},
-		});
-		const adapter = makeAdapter({
-			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
-		});
+			},);
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
 
@@ -361,15 +358,9 @@ describe("SemanticIndex.build()", () => {
 	});
 
 	it("re-embeds files whose mtime changed", async () => {
-		const storedData = JSON.stringify({
-			model: "text-embedding-3-small",
-			embeddings: {
+		const adapter = makeAdapterWithEmbeddings("text-embedding-3-small", {
 				"note.md": { vector: [1, 0], mtime: 100, preview: "old" },
-			},
-		});
-		const adapter = makeAdapter({
-			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
-		});
+			},);
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
 
@@ -388,16 +379,10 @@ describe("SemanticIndex.build()", () => {
 	});
 
 	it("removes entries for deleted files", async () => {
-		const storedData = JSON.stringify({
-			model: "text-embedding-3-small",
-			embeddings: {
+		const adapter = makeAdapterWithEmbeddings("text-embedding-3-small", {
 				"existing.md": { vector: [1, 0], mtime: 1, preview: "x" },
 				"deleted.md": { vector: [0, 1], mtime: 2, preview: "y" },
-			},
-		});
-		const adapter = makeAdapter({
-			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
-		});
+			},);
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
 
@@ -436,20 +421,14 @@ describe("SemanticIndex.search()", () => {
 	});
 
 	it("returns results ranked by cosine similarity (descending)", async () => {
-		const storedData = JSON.stringify({
-			model: "text-embedding-3-small",
-			embeddings: {
+		const adapter = makeAdapterWithEmbeddings("text-embedding-3-small", {
 				"low.md": { vector: [0, 1], mtime: 1, preview: "low relevance" },
 				"high.md": { vector: [1, 0], mtime: 2, preview: "high relevance" },
 				"mid.md": { vector: [0.7, 0.7], mtime: 3, preview: "mid relevance" },
-			},
-		});
-		const adapter = makeAdapter({
-			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
-		});
+			},);
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
-		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
+		await idx.load(adapter, getEmbeddingStorageDir(TEST_CONFIG_DIR));
 
 		// Query vector aligned with [1, 0] → "high.md" should rank first
 		const fetchMock = mockFetch([1, 0]);
@@ -466,21 +445,15 @@ describe("SemanticIndex.search()", () => {
 	});
 
 	it("respects the limit parameter", async () => {
-		const storedData = JSON.stringify({
-			model: "text-embedding-3-small",
-			embeddings: Object.fromEntries(
+		const adapter = makeAdapterWithEmbeddings("text-embedding-3-small", Object.fromEntries(
 				Array.from({ length: 20 }, (_, i) => [
 					`note${i}.md`,
 					{ vector: [Math.random(), Math.random()], mtime: i, preview: `note ${i}` },
 				])
-			),
-		});
-		const adapter = makeAdapter({
-			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
-		});
+			),);
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
-		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
+		await idx.load(adapter, getEmbeddingStorageDir(TEST_CONFIG_DIR));
 
 		const fetchMock = mockFetch([0.5, 0.5]);
 		vi.stubGlobal("fetch", fetchMock);
@@ -507,18 +480,12 @@ describe("SemanticIndex.search()", () => {
 	});
 
 	it("surfaces preview text in results", async () => {
-		const storedData = JSON.stringify({
-			model: "text-embedding-3-small",
-			embeddings: {
+		const adapter = makeAdapterWithEmbeddings("text-embedding-3-small", {
 				"n.md": { vector: [1, 0], mtime: 1, preview: "The actual preview" },
-			},
-		});
-		const adapter = makeAdapter({
-			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
-		});
+			},);
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
-		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
+		await idx.load(adapter, getEmbeddingStorageDir(TEST_CONFIG_DIR));
 
 		const fetchMock = mockFetch([1, 0]);
 		vi.stubGlobal("fetch", fetchMock);
@@ -566,18 +533,12 @@ describe("SemanticIndex.search()", () => {
 	});
 
 	it("parses Ollama /api/embed response format (embeddings: number[][])", async () => {
-		const storedData = JSON.stringify({
-			model: "nomic-embed-text",
-			embeddings: {
+		const adapter = makeAdapterWithEmbeddings("nomic-embed-text", {
 				"n.md": { vector: [1, 0], mtime: 1, preview: "p" },
-			},
-		});
-		const adapter = makeAdapter({
-			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
-		});
+			},);
 		const idx = new SemanticIndex();
 		idx.configure({ endpoint: "http://localhost:11434/api/embed", apiKey: "", model: "nomic-embed-text" });
-		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
+		await idx.load(adapter, getEmbeddingStorageDir(TEST_CONFIG_DIR));
 
 		// Ollama /api/embed response
 		const fetchMock = vi.fn().mockResolvedValue({
@@ -596,18 +557,12 @@ describe("SemanticIndex.search()", () => {
 	});
 
 	it("parses Ollama /api/embeddings (legacy) response format (embedding: number[])", async () => {
-		const storedData = JSON.stringify({
-			model: "nomic-embed-text",
-			embeddings: {
+		const adapter = makeAdapterWithEmbeddings("nomic-embed-text", {
 				"n.md": { vector: [1, 0], mtime: 1, preview: "p" },
-			},
-		});
-		const adapter = makeAdapter({
-			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
-		});
+			},);
 		const idx = new SemanticIndex();
 		idx.configure({ endpoint: "http://localhost:11434/api/embeddings", apiKey: "", model: "nomic-embed-text" });
-		await idx.load(adapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
+		await idx.load(adapter, getEmbeddingStorageDir(TEST_CONFIG_DIR));
 
 		// Ollama /api/embeddings legacy response
 		const fetchMock = vi.fn().mockResolvedValue({
@@ -683,18 +638,12 @@ describe("SemanticIndex.update()", () => {
 	});
 
 	it("skips re-embedding when mtime is unchanged", async () => {
-		const storedData = JSON.stringify({
-			model: "text-embedding-3-small",
-			embeddings: {
+		const cachedAdapter = makeAdapterWithEmbeddings("text-embedding-3-small", {
 				"existing.md": { vector: [1, 0], mtime: 50, preview: "cached preview" },
-			},
-		});
-		const cachedAdapter = makeAdapter({
-			[getEmbeddingStoragePath(TEST_CONFIG_DIR)]: storedData,
-		});
+			},);
 		const idx = new SemanticIndex();
 		idx.configure(makeConfig());
-		await idx.load(cachedAdapter, getEmbeddingStoragePath(TEST_CONFIG_DIR));
+		await idx.load(cachedAdapter, getEmbeddingStorageDir(TEST_CONFIG_DIR));
 
 		const file = { path: "existing.md", basename: "existing", stat: { mtime: 50 } };
 		const vault = { configDir: TEST_CONFIG_DIR, cachedRead: async () => "Same content." };
