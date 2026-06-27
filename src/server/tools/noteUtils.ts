@@ -1,6 +1,7 @@
 /** Obsidian-dependent helpers shared across tool modules. */
 
 import { App, TFile } from "obsidian";
+import { sanitizePath } from "./utils";
 
 /**
  * Resolves a vault path to a TFile using a three-step strategy:
@@ -40,4 +41,16 @@ export function resolveNoteFile(app: App, safePath: string): TFile | null {
 	}
 
 	return null;
+}
+
+/**
+ * Normalizes a note path by sanitizing it and ensuring it has a .md extension.
+ * Helps prevent saving non-markdown files by accident.
+ */
+export function normalizeNotePath(path: string): string {
+	const safePath = sanitizePath(path);
+	if (!/\.[^/]+$/.test(safePath)) {
+		return safePath + ".md";
+	}
+	return safePath;
 }

@@ -5,11 +5,9 @@ import { sanitizePath, MAX_PATH_LENGTH } from "./utils";
 import { resolveNoteFile } from "./noteUtils";
 import { VaultIndex } from "../VaultIndex";
 import { extractTokens } from "../textUtils";
-import { computeScore, buildSmartExcerpt, paginate, execRegexSearch } from "../searchLogic";
+import { computeScore, buildSmartExcerpt, paginate } from "../searchLogic";
 import {
 	MAX_QUERY_LENGTH,
-	MAX_REGEX_QUERY_LENGTH,
-	REGEX_MATCH_LIMIT,
 	BATCH_SIZE,
 	SEARCH_RESULTS_DEFAULT,
 	QUERY_RESULTS_DEFAULT,
@@ -31,19 +29,17 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 				"Busca texto em todas as notas do vault (pesquisa no CONTEÚDO e no TÍTULO dos arquivos). " +
 				"Modo 'phrase' (padrão): substring exata, resultados ordenados por score. " +
 				"Modo 'tokens': todos os termos devem aparecer na nota, em qualquer ordem. " +
-				"Modo 'regex': expressão regular JavaScript (máx 200 chars na query). " +
 				"Suporta paginação via offset/limit.",
 			inputSchema: {
 				query: z.string().min(1).max(MAX_QUERY_LENGTH),
 				case_sensitive: z.boolean().optional().default(false),
 				mode: z
-					.enum(["phrase", "tokens", "regex"])
+					.enum(["phrase", "tokens"])
 					.optional()
 					.default("phrase")
 					.describe(
 						"'phrase': busca substring exata (default). " +
-						"'tokens': busca notas que contenham TODOS os termos, em qualquer ordem. " +
-						"'regex': expressão regular JavaScript (max 200 chars, aborta após 1000 matches)."
+						"'tokens': busca notas que contenham TODOS os termos, em qualquer ordem."
 					),
 				offset: z.number().int().min(0).optional().default(0)
 					.describe("Índice do primeiro resultado a retornar (default 0)."),
@@ -74,84 +70,7 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 			};
 			const results: SearchResult[] = [];
 
-			if (mode === "regex") {
-				if (query.length > MAX_REGEX_QUERY_LENGTH) {
-					throw new Error(
-						`Query regex excede o limite de ${MAX_REGEX_QUERY_LENGTH} caracteres (recebeu ${query.length}).`
-					);
-				}
-
-				// Compile the regex — surface syntax errors immediately
-				let regex: RegExp;
-				try {
-					const flags = case_sensitive ? "g" : "gi";
-					regex = new RegExp(query, flags);
-				} catch (e) {
-					throw new Error(`Regex inválido: ${e instanceof Error ? e.message : String(e)}`);
-				}
-
-				let totalMatchCount = 0;
-				let aborted = false;
-
-				for (let i = 0; i < allFiles.length; i += BATCH_SIZE) {
-					if (aborted) break;
-					const batch = allFiles.slice(i, i + BATCH_SIZE);
-					const items = await Promise.all(
-						batch.map(async (file) => ({ file, content: await app.vault.cachedRead(file) }))
-					);
-					for (const { file, content } of items) {
-						const remaining = REGEX_MATCH_LIMIT - totalMatchCount;
-						if (remaining <= 0) { aborted = true; break; }
-
-						const hit = execRegexSearch(content, regex, remaining);
-						if (!hit) continue;
-
-						totalMatchCount += hit.matchCount;
-						if (hit.limitReached) aborted = true;
-
-						const excerpt = buildSmartExcerpt(content, hit.firstMatchIdx, hit.firstMatchLen);
-						const score = computeScore({
-							content,
-							queryLower: query.toLowerCase(),
-							matchCount: hit.matchCount,
-							totalDocs,
-							docsWithTerm,
-							mtime: file.stat.mtime,
-						});
-						results.push({ path: file.path, score, excerpt, match_type: "regex" });
-					}
-				}
-
-				if (aborted) {
-					results.sort((a, b) => b.score - a.score);
-					const { page, total_results } = paginate(results, offset, limit);
-					return {
-						content: [
-							{
-								type: "text",
-								text: JSON.stringify(
-									{
-										query, mode, total_results, offset, limit,
-										warning: `Limite de ${REGEX_MATCH_LIMIT} matches atingido — resultados parciais.`,
-										results: page,
-									},
-									null, 2
-								),
-							},
-						],
-					};
-				}
-			} else if (mode === "tokens") {
-				const candidates = await vaultIndex.getCandidates(query, app.vault);
-				const filesToSearch =
-					candidates === null
-						? allFiles
-						: allFiles.filter((f) => {
-								const nameLower = f.name.toLowerCase();
-								const nameMatch = queryTokens.every((t) => nameLower.includes(t));
-								return nameMatch || candidates.has(f.path);
-						  });
-
+			async function performTokenSearch(filesToSearch: any[], isFallback = false) {
 				for (let i = 0; i < filesToSearch.length; i += BATCH_SIZE) {
 					const batch = filesToSearch.slice(i, i + BATCH_SIZE);
 					const items = await Promise.all(
@@ -177,15 +96,31 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 							docsWithTerm,
 							mtime: file.stat.mtime,
 						});
-						results.push({ path: file.path, score, excerpt, match_type: nameMatch ? "title/tokens" : "tokens" });
+						const match_type = isFallback
+							? (nameMatch ? "title/tokens_fallback" : "tokens_fallback")
+							: (nameMatch ? "title/tokens" : "tokens");
+						results.push({ path: file.path, score, excerpt, match_type });
 					}
 				}
+			}
+
+			if (mode === "tokens") {
+				const candidates = await vaultIndex.getCandidates(query, app.vault);
+				const filesToSearch =
+					candidates === null
+						? allFiles
+						: allFiles.filter((f) => {
+								const nameLower = f.name.toLowerCase();
+								const nameMatch = queryTokens.every((t) => nameLower.includes(t));
+								return nameMatch || candidates.has(f.path);
+						  });
+
+				await performTokenSearch(filesToSearch);
 			} else {
 				// Phrase mode — exact substring, TF-IDF scored
 				const searchFor = case_sensitive ? query : queryLower;
-				const candidates = case_sensitive
-					? null
-					: await vaultIndex.getCandidates(query, app.vault);
+				// Optimize phrase mode by ALWAYS pre-filtering with VaultIndex regardless of case_sensitive
+				const candidates = await vaultIndex.getCandidates(query, app.vault);
 				const filesToSearch =
 					candidates === null
 						? allFiles
@@ -239,34 +174,7 @@ function registerSearchVault(server: McpServer, app: App, vaultIndex: VaultIndex
 					});
 					
 					if (tokenFiles.length > 0) {
-						for (let i = 0; i < tokenFiles.length; i += BATCH_SIZE) {
-							const batch = tokenFiles.slice(i, i + BATCH_SIZE);
-							const items = await Promise.all(
-								batch.map(async (file) => ({ file, content: await app.vault.cachedRead(file) }))
-							);
-							for (const { file, content } of items) {
-								const nameLower = file.name.toLowerCase();
-								const nameMatch = queryTokens.every((t) => nameLower.includes(t));
-								
-								const firstToken = queryTokens.find((t) => t.length >= 2) ?? queryLower;
-								const searchIn = case_sensitive ? content : content.toLowerCase();
-								const idx = searchIn.indexOf(firstToken);
-								
-								const excerpt = idx !== -1
-									? buildSmartExcerpt(content, idx, firstToken.length)
-									: (nameMatch ? "(Correspondência no título do arquivo)" : content.slice(0, 160).replace(/\n/g, " "));
-									
-								const score = computeScore({
-									content,
-									queryLower,
-									matchCount: nameMatch ? 10 : 1, // Boost if title matches
-									totalDocs,
-									docsWithTerm,
-									mtime: file.stat.mtime,
-								});
-								results.push({ path: file.path, score, excerpt, match_type: nameMatch ? "title/tokens_fallback" : "tokens_fallback" });
-							}
-						}
+						await performTokenSearch(tokenFiles, true);
 					}
 				}
 			}

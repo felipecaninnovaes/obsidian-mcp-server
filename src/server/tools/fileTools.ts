@@ -2,7 +2,30 @@ import { App, TFile, TFolder } from "obsidian";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sanitizePath, applyTextEdit, assertWritePermission, MAX_PATH_LENGTH } from "./utils";
-import { resolveNoteFile } from "./noteUtils";
+import { resolveNoteFile, normalizeNotePath } from "./noteUtils";
+
+// --- Shared Core Logic ---
+async function doCreateNote(app: App, path: string, content: string): Promise<string> {
+	const safePath = normalizeNotePath(path);
+	if (app.vault.getAbstractFileByPath(safePath)) throw new Error("Arquivo já existe");
+	const title = safePath.split("/").pop()?.replace(/\.md$/i, "") || "";
+	const expandedContent = expandTemplate(content, { title });
+	await app.vault.create(safePath, expandedContent);
+	return safePath;
+}
+
+async function doRenameNote(app: App, path: string, newPath: string): Promise<{ from: string, to: string }> {
+	const safePath = sanitizePath(path); // source path is just sanitized
+	const safeNewPath = normalizeNotePath(newPath); // dest path is normalized to .md
+
+	const file = resolveNoteFile(app, safePath);
+	if (!file) throw new Error("Arquivo não encontrado");
+	if (app.vault.getAbstractFileByPath(safeNewPath)) throw new Error("Já existe um arquivo no novo caminho");
+
+	await app.fileManager.renameFile(file, safeNewPath);
+	return { from: safePath, to: safeNewPath };
+}
+// -------------------------
 
 import { MAX_CONTENT_LENGTH } from "../../constants";
 import { summarizeParams } from "../AuditLog";
@@ -103,13 +126,7 @@ function registerCreateNote(
 		},
 		async ({ path, content }) => {
 			assertWritePermission(permissions);
-			const safePath = sanitizePath(path);
-			if (app.vault.getAbstractFileByPath(safePath)) throw new Error("Arquivo já existe");
-			// Extract title from path (filename without .md extension)
-			const title = safePath.split("/").pop()?.replace(/\.md$/i, "") || "";
-			// Expand template variables in content
-			const expandedContent = expandTemplate(content, { title });
-			await app.vault.create(safePath, expandedContent);
+			const safePath = await doCreateNote(app, path, content);
 			auditLog.record({ timestamp: Date.now(), sessionId, tool: "create_note", params_summary: summarizeParams({ path: safePath }), result: "ok" });
 			return { content: [{ type: "text", text: `Nota criada: ${safePath}` }] };
 		}
@@ -193,21 +210,14 @@ function registerRenameNote(
 		},
 		async ({ path, new_path }) => {
 			assertWritePermission(permissions);
-			const safePath = sanitizePath(path);
-			const safeNewPath = sanitizePath(new_path);
+			const { from, to } = await doRenameNote(app, path, new_path);
 
-			const file = resolveNoteFile(app, safePath);
-			if (!file) throw new Error("Arquivo não encontrado");
-			if (app.vault.getAbstractFileByPath(safeNewPath)) throw new Error("Já existe um arquivo no novo caminho");
-
-			await app.fileManager.renameFile(file, safeNewPath);
-
-			auditLog.record({ timestamp: Date.now(), sessionId, tool: "rename_note", params_summary: summarizeParams({ from: safePath, to: safeNewPath }), result: "ok" });
+			auditLog.record({ timestamp: Date.now(), sessionId, tool: "rename_note", params_summary: summarizeParams({ from, to }), result: "ok" });
 			return {
 				content: [
 					{
 						type: "text",
-						text: JSON.stringify({ renamed: { from: safePath, to: safeNewPath }, links_updated_automatically: true }, null, 2),
+						text: JSON.stringify({ renamed: { from, to }, links_updated_automatically: true }, null, 2),
 					},
 				],
 			};
@@ -318,19 +328,7 @@ function registerBulkCreateNotes(
 
 			for (const note of notes) {
 				try {
-					const safePath = sanitizePath(note.path);
-					if (app.vault.getAbstractFileByPath(safePath)) {
-						results.push({
-							path: safePath,
-							success: false,
-							error: "Arquivo já existe",
-						});
-						continue;
-					}
-					// Expand template variables in content
-					const title = safePath.split("/").pop()?.replace(/\.md$/i, "") || "";
-					const expandedContent = expandTemplate(note.content, { title });
-					await app.vault.create(safePath, expandedContent);
+					const safePath = await doCreateNote(app, note.path, note.content);
 					results.push({ path: safePath, success: true });
 				} catch (err) {
 					results.push({
@@ -399,32 +397,8 @@ function registerBulkMoveNotes(
 
 			for (const move of moves) {
 				try {
-					const safeFrom = sanitizePath(move.from);
-					const safeTo = sanitizePath(move.to);
-
-					const file = resolveNoteFile(app, safeFrom);
-					if (!file) {
-						results.push({
-							from: safeFrom,
-							to: safeTo,
-							success: false,
-							error: "Arquivo de origem não encontrado",
-						});
-						continue;
-					}
-
-					if (app.vault.getAbstractFileByPath(safeTo)) {
-						results.push({
-							from: safeFrom,
-							to: safeTo,
-							success: false,
-							error: "Arquivo de destino já existe",
-						});
-						continue;
-					}
-
-					await app.fileManager.renameFile(file, safeTo);
-					results.push({ from: safeFrom, to: safeTo, success: true });
+					const { from, to } = await doRenameNote(app, move.from, move.to);
+					results.push({ from, to, success: true });
 				} catch (err) {
 					results.push({
 						from: move.from,

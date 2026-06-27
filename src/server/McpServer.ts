@@ -1,4 +1,6 @@
 import { App } from "obsidian";
+import express from "express";
+import cors from "cors";
 import { McpServerSettings } from "../types";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -100,76 +102,65 @@ export class ObsidianMcpServer {
 			);
 		}
 
-		// eslint-disable-next-line @typescript-eslint/no-misused-promises
-		this.httpServer = http.createServer(async (req, res) => {
-			logger.debug(`Incoming Request: ${req.method} ${req.url}`);
-			logger.debug(`Headers:`, req.headers);
+		const app = express();
 
-			const origin = req.headers.origin;
-			if (origin) {
+		// Disable x-powered-by header
+		app.disable("x-powered-by");
+
+		// CORS Middleware
+		app.use(cors({
+			origin: (origin, callback) => {
+				if (!origin) return callback(null, true);
+				
 				const allowedOrigins = (this.settings.allowedOrigins || "")
 					.split(",")
 					.map((o) => o.trim())
 					.filter((o) => o.length > 0);
 
-				let isAllowed = false;
 				try {
 					const url = new URL(origin);
-					if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
-						isAllowed = true;
-					} else if (allowedOrigins.includes(origin)) {
-						isAllowed = true;
+					if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || allowedOrigins.includes(origin)) {
+						return callback(null, true);
 					}
-			// eslint-disable-next-line @typescript-eslint/no-unused-vars
 				} catch (e) {
 					// Ignore invalid origins
 				}
+				
+				// Return callback(null, false) to block CORS but not crash the request
+				callback(null, false);
+			},
+			methods: ["GET", "POST", "DELETE", "OPTIONS"],
+			allowedHeaders: ["Content-Type", "Authorization", "Mcp-Session-Id"],
+			exposedHeaders: ["Mcp-Session-Id"]
+		}));
 
-				if (isAllowed) {
-					res.setHeader("Access-Control-Allow-Origin", origin);
-				}
-			}
-
-			res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-			res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id");
-			res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
-
-			if (req.method === "OPTIONS") {
-				res.writeHead(204);
-				res.end();
-				return;
-			}
-
-			// Health check is intentionally public — returns no sensitive data
-			// and allows clients/monitors to check availability before authenticating.
-			if (req.url === "/health" || req.url === "/") {
-				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ status: "ok", version: "1.0.0" }));
-				return;
+		// Auth and Rate Limit Middleware
+		app.use((req, res, next) => {
+			logger.debug(`Incoming Request: ${req.method} ${req.url}`);
+			
+			if (req.path === "/health" || req.path === "/") {
+				return next();
 			}
 
 			if (req.method === "POST") {
 				const contentLength = parseInt(req.headers["content-length"] ?? "0", 10);
 				if (contentLength > MAX_BODY_SIZE) {
-					res.writeHead(413, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: "Payload too large" }));
+					res.status(413).json({ error: "Payload too large" });
 					return;
 				}
 
 				const ct = req.headers["content-type"] ?? "";
 				if (!ct.startsWith("application/json")) {
-					res.writeHead(415, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: "Unsupported Media Type: Content-Type must be application/json" }));
+					res.status(415).json({ error: "Unsupported Media Type: Content-Type must be application/json" });
 					return;
 				}
 			}
 
-			if (this.settings.enableAuth) {
+			if (this.settings.enableAuth && req.method !== "OPTIONS") {
 				const clientIp = req.socket.remoteAddress ?? "unknown";
 
 				if (isRateLimited(clientIp)) {
-					res.writeHead(429, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: "Too many requests" }));
+					res.status(429).json({ error: "Too many requests" });
 					return;
 				}
 
@@ -183,37 +174,41 @@ export class ObsidianMcpServer {
 
 				if (!isValid) {
 					recordAuthFailure(clientIp);
-					res.writeHead(401, { "Content-Type": "application/json" });
-					res.end(JSON.stringify({ error: "Unauthorized" }));
+					res.status(401).json({ error: "Unauthorized" });
 					return;
 				}
 			}
+			next();
+		});
 
-			const pathname = req.url ? new URL(req.url, `http://localhost`).pathname : "";
+		// Routes
+		app.get(["/health", "/"], (req, res) => {
+			res.json({ status: "ok", version: "1.0.0" });
+		});
 
-			if (pathname === "/mcp" || pathname === "/mcp/") {
-				if (req.method === "GET" && req.headers["accept"]?.includes("text/event-stream")) {
-					await this.handleSseConnect(req, res);
-					return;
-				}
-				await this.handleMcpRequest(req, res);
-				return;
-			}
-
-			// SSE transport endpoints (legacy — required by Claude Desktop)
-			if (pathname === "/sse" && req.method === "GET") {
+		app.all("/mcp", async (req, res) => {
+			if (req.method === "GET" && req.headers["accept"]?.includes("text/event-stream")) {
 				await this.handleSseConnect(req, res);
 				return;
 			}
-
-			if (pathname === "/messages" && req.method === "POST") {
-				await this.handleSseMessage(req, res);
-				return;
-			}
-
-			res.writeHead(404, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ error: "Not Found" }));
+			await this.handleMcpRequest(req, res);
 		});
+
+		// SSE transport endpoints (legacy — required by Claude Desktop)
+		app.get("/sse", async (req, res) => {
+			await this.handleSseConnect(req, res);
+		});
+
+		app.post("/messages", async (req, res) => {
+			await this.handleSseMessage(req, res);
+		});
+
+		// 404 Handler
+		app.use((req, res) => {
+			res.status(404).json({ error: "Not Found" });
+		});
+
+		this.httpServer = http.createServer(app);
 
 		const bindHost = this.settings.networkAccess ? "0.0.0.0" : "127.0.0.1";
 
@@ -299,7 +294,10 @@ export class ObsidianMcpServer {
 		this.sessions.set(sid, { server, transport, cleanupVaultListeners });
 		logger.debug(`Session created (total: ${this.sessions.size})`);
 
+		let isClosing = false;
 		transport.onclose = () => {
+			if (isClosing) return;
+			isClosing = true;
 			this.sessions.get(sid)?.cleanupVaultListeners();
 			this.sessions.delete(sid);
 			this.sessionRateLimiter.evict(sid);
@@ -336,15 +334,16 @@ export class ObsidianMcpServer {
 		this.sseSessions.set(sid, { server, transport, cleanupVaultListeners });
 		logger.debug(`SSE session created: ${sid} (total: ${this.sseSessions.size})`);
 
+		let isClosing = false;
 		transport.onclose = () => {
+			if (isClosing) return;
+			isClosing = true;
 			this.sseSessions.get(sid)?.cleanupVaultListeners();
 			this.sseSessions.delete(sid);
 			this.sessionRateLimiter.evict(sid);
 			server.close().catch(() => {});
 			logger.debug(`SSE session closed (total: ${this.sseSessions.size})`);
 		};
-
-		await transport.start();
 	}
 
 	private async handleSseMessage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
