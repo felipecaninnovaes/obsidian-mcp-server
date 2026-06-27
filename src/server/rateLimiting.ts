@@ -56,18 +56,18 @@ export class SessionRateLimiter {
 
 	private readonly windows = new Map<string, number[]>();
 
-	/**
-	 * Records a new request for `sessionId` and returns whether it is allowed.
-	 * Returns `false` (rate-limited) when the count in the last WINDOW_MS
-	 * exceeds MAX_REQUESTS.
-	 */
 	check(sessionId: string, now = Date.now()): boolean {
 		const cutoff = now - SessionRateLimiter.WINDOW_MS;
-		let timestamps = this.windows.get(sessionId) ?? [];
-		// Evict timestamps outside the window
-		timestamps = timestamps.filter((t) => t > cutoff);
+		let timestamps = this.windows.get(sessionId);
+		if (!timestamps) {
+			timestamps = [];
+			this.windows.set(sessionId, timestamps);
+		}
+		// Evict timestamps outside the window in-place
+		while (timestamps.length > 0 && timestamps[0]! <= cutoff) {
+			timestamps.shift();
+		}
 		timestamps.push(now);
-		this.windows.set(sessionId, timestamps);
 		return timestamps.length <= SessionRateLimiter.MAX_REQUESTS;
 	}
 
@@ -79,6 +79,13 @@ export class SessionRateLimiter {
 	/** Current request count within the active window (for testing). */
 	count(sessionId: string, now = Date.now()): number {
 		const cutoff = now - SessionRateLimiter.WINDOW_MS;
-		return (this.windows.get(sessionId) ?? []).filter((t) => t > cutoff).length;
+		const timestamps = this.windows.get(sessionId);
+		if (!timestamps) return 0;
+		let validCount = 0;
+		for (let i = timestamps.length - 1; i >= 0; i--) {
+			if (timestamps[i]! > cutoff) validCount++;
+			else break;
+		}
+		return validCount;
 	}
 }

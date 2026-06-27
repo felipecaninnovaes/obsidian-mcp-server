@@ -140,24 +140,33 @@ export default class McpServerPlugin extends Plugin {
 		this.embeddingTimers.set(path, timer);
 	}
 
-	async startServer() {
-		if (this.mcpServer?.isRunning()) return;
-		this.mcpServer = new ObsidianMcpServer(this.app, this.settings, this.vaultIndex, this.backlinkIndex, this.deleteLog, this.semanticIndex);
+	private isStarting = false;
 
-		// Exponential backoff: 1 s → 2 s → 4 s (max 3 attempts)
-		const maxAttempts = 3;
-		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-			try {
-				await this.mcpServer.start();
-				new Notice(`MCP server started on port ${this.settings.port}`);
-				return;
-			} catch (e) {
-				if (attempt === maxAttempts) {
-					new Notice(`MCP server failed to start: ${e instanceof Error ? e.message : String(e)}`);
-					throw e;
+	async startServer() {
+		if (this.mcpServer?.isRunning() || this.isStarting) return;
+		this.isStarting = true;
+
+		try {
+			this.mcpServer = new ObsidianMcpServer(this.app, this.settings, this.vaultIndex, this.backlinkIndex, this.deleteLog, this.semanticIndex);
+
+			// Exponential backoff: 1 s → 2 s → 4 s (max 3 attempts)
+			// Handles port TIME_WAIT when the plugin is reloaded
+			const maxAttempts = 3;
+			for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+				try {
+					await this.mcpServer.start();
+					new Notice(`MCP server started on port ${this.settings.port}`);
+					return;
+				} catch (e) {
+					if (attempt === maxAttempts) {
+						new Notice(`MCP server failed to start: ${e instanceof Error ? e.message : String(e)}`);
+						throw e;
+					}
+					await new Promise<void>((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
 				}
-				await new Promise<void>((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
 			}
+		} finally {
+			this.isStarting = false;
 		}
 	}
 

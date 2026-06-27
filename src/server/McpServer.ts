@@ -12,7 +12,7 @@ import { isRateLimited, recordAuthFailure, cleanupExpiredEntries, SessionRateLim
 import { AuditLog } from "./AuditLog";
 import { logger } from "../logger";
 import * as http from "http";
-import { randomBytes, timingSafeEqual } from "crypto";
+import { randomBytes, timingSafeEqual, createHash } from "crypto";
 import { MAX_SESSIONS, MAX_BODY_SIZE, VAULT_DEBOUNCE_MS } from "../constants";
 
 interface StreamableSession {
@@ -102,11 +102,34 @@ export class ObsidianMcpServer {
 
 		// eslint-disable-next-line @typescript-eslint/no-misused-promises
 		this.httpServer = http.createServer(async (req, res) => {
-			console.log(`[MCP Server Debug] Incoming Request: ${req.method} ${req.url}`);
-			console.log(`[MCP Server Debug] Headers:`, req.headers);
+			logger.debug(`Incoming Request: ${req.method} ${req.url}`);
+			logger.debug(`Headers:`, req.headers);
 
-			// Allow CORS for all origins to accept connections from Docker (AnythingLLM)
-			res.setHeader("Access-Control-Allow-Origin", "*");
+			const origin = req.headers.origin;
+			if (origin) {
+				const allowedOrigins = (this.settings.allowedOrigins || "")
+					.split(",")
+					.map((o) => o.trim())
+					.filter((o) => o.length > 0);
+
+				let isAllowed = false;
+				try {
+					const url = new URL(origin);
+					if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+						isAllowed = true;
+					} else if (allowedOrigins.includes(origin)) {
+						isAllowed = true;
+					}
+			// eslint-disable-next-line @typescript-eslint/no-unused-vars
+				} catch (e) {
+					// Ignore invalid origins
+				}
+
+				if (isAllowed) {
+					res.setHeader("Access-Control-Allow-Origin", origin);
+				}
+			}
+
 			res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
 			res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Mcp-Session-Id");
 			res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
@@ -153,9 +176,10 @@ export class ObsidianMcpServer {
 				const authHeader = req.headers["authorization"];
 				const expected = `Bearer ${this.settings.apiKey}`;
 				const supplied = authHeader ?? "";
-				const isValid =
-					expected.length === supplied.length &&
-					timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+				
+				const expectedHash = createHash("sha256").update(expected).digest();
+				const suppliedHash = createHash("sha256").update(supplied).digest();
+				const isValid = timingSafeEqual(expectedHash, suppliedHash);
 
 				if (!isValid) {
 					recordAuthFailure(clientIp);
@@ -196,11 +220,16 @@ export class ObsidianMcpServer {
 		logger.setLevel(this.settings.logLevel);
 
 		await new Promise<void>((resolve, reject) => {
+			const onError = (err: Error) => reject(err);
+			this.httpServer!.once("error", onError);
 			this.httpServer!.listen(this.settings.port, bindHost, () => {
+				this.httpServer!.removeListener("error", onError);
+				this.httpServer!.on("error", (err) => {
+					logger.error("HTTP Server error:", err);
+				});
 				logger.info(`Listening on http://${bindHost}:${this.settings.port}/mcp`);
 				resolve();
 			});
-			this.httpServer!.on("error", reject);
 		});
 
 		this.running = true;
@@ -343,13 +372,7 @@ export class ObsidianMcpServer {
 			this.cleanupInterval = null;
 		}
 
-		if (this.httpServer) {
-			await new Promise<void>((resolve) => {
-				this.httpServer!.close(() => resolve());
-			});
-			this.httpServer = null;
-		}
-
+		// Close sessions first to end active SSE streams
 		for (const { server, transport, cleanupVaultListeners } of this.sessions.values()) {
 			cleanupVaultListeners();
 			transport.onclose = undefined;
@@ -365,6 +388,17 @@ export class ObsidianMcpServer {
 			await transport.close().catch(() => {});
 		}
 		this.sseSessions.clear();
+
+		if (this.httpServer) {
+			// Force close all lingering keep-alive connections
+			if ("closeAllConnections" in this.httpServer) {
+				(this.httpServer as any).closeAllConnections();
+			}
+			await new Promise<void>((resolve) => {
+				this.httpServer!.close(() => resolve());
+			});
+			this.httpServer = null;
+		}
 
 		this.running = false;
 	}

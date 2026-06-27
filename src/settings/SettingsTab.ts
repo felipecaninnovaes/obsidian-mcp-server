@@ -126,6 +126,20 @@ export class McpSettingsTab extends PluginSettingTab {
 					})
 			);
 
+		new Setting(containerEl)
+			// eslint-disable-next-line obsidianmd/ui/sentence-case
+			.setName("Allowed CORS origins")
+			.setDesc("Comma-separated list of origins allowed to connect (e.g. http://192.168.1.15:3001). Leave empty to only allow localhost.")
+			.addText((text) =>
+				text
+					.setPlaceholder("http://192.168.1.15:3001")
+					.setValue(this.plugin.settings.allowedOrigins)
+					.onChange(async (value) => {
+						this.plugin.settings.allowedOrigins = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
 		// ── Semantic search ───────────────────────────────────────────────────────
 
 		// eslint-disable-next-line obsidianmd/settings-tab/no-manual-html-headings, obsidianmd/ui/sentence-case

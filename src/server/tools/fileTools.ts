@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sanitizePath, applyTextEdit, assertWritePermission, MAX_PATH_LENGTH } from "./utils";
 import { resolveNoteFile } from "./noteUtils";
-import { logger } from "../../logger";
+
 import { MAX_CONTENT_LENGTH } from "../../constants";
 import { summarizeParams } from "../AuditLog";
 import { expandTemplate } from "./templateUtils";
@@ -200,47 +200,14 @@ function registerRenameNote(
 			if (!file) throw new Error("Arquivo não encontrado");
 			if (app.vault.getAbstractFileByPath(safeNewPath)) throw new Error("Já existe um arquivo no novo caminho");
 
-			const oldWithoutExt = safePath.replace(/\.md$/i, "");
-			const oldBasename = oldWithoutExt.split("/").pop() as string;
-			const newWithoutExt = safeNewPath.replace(/\.md$/i, "");
-			const newBasename = newWithoutExt.split("/").pop() as string;
-
-			const replacements: [RegExp, string][] = (
-				[
-					[oldWithoutExt, newWithoutExt],
-					[oldBasename, newBasename],
-				] as [string, string][]
-			).map(([oldRef, newRef]) => {
-				const escaped = oldRef.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-				return [new RegExp(`\\[\\[${escaped}(\\|[^\\]]*)?\\]\\]`, "gi"), newRef] as [RegExp, string];
-			});
-
-			await app.vault.rename(file, safeNewPath);
-
-			let updatedFiles = 0;
-			try {
-				for (const note of app.vault.getMarkdownFiles()) {
-					if (note.path === safeNewPath) continue;
-					const original = await app.vault.read(note);
-					let updated = original;
-					for (const [regex, newRef] of replacements) {
-						updated = updated.replace(regex, (_, alias) => `[[${newRef}${alias ?? ""}]]`);
-					}
-					if (updated !== original) {
-						await app.vault.modify(note, updated);
-						updatedFiles++;
-					}
-				}
-			} catch (e) {
-				logger.error("Error updating links after rename:", e);
-			}
+			await app.fileManager.renameFile(file, safeNewPath);
 
 			auditLog.record({ timestamp: Date.now(), sessionId, tool: "rename_note", params_summary: summarizeParams({ from: safePath, to: safeNewPath }), result: "ok" });
 			return {
 				content: [
 					{
 						type: "text",
-						text: JSON.stringify({ renamed: { from: safePath, to: safeNewPath }, links_updated_in: updatedFiles }, null, 2),
+						text: JSON.stringify({ renamed: { from: safePath, to: safeNewPath }, links_updated_automatically: true }, null, 2),
 					},
 				],
 			};
@@ -456,7 +423,7 @@ function registerBulkMoveNotes(
 						continue;
 					}
 
-					await app.vault.rename(file, safeTo);
+					await app.fileManager.renameFile(file, safeTo);
 					results.push({ from: safeFrom, to: safeTo, success: true });
 				} catch (err) {
 					results.push({

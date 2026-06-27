@@ -19,6 +19,7 @@ export interface McpServerSettings {
 	embeddingApiKey: string;
 	/** Embedding model name. E.g. text-embedding-3-small */
 	embeddingModel: string;
+	allowedOrigins: string;
 }
 
 export const DEFAULT_SETTINGS: McpServerSettings = {
@@ -33,4 +34,5 @@ export const DEFAULT_SETTINGS: McpServerSettings = {
 	embeddingEndpoint: "https://api.openai.com/v1/embeddings",
 	embeddingApiKey: "",
 	embeddingModel: "text-embedding-3-small",
+	allowedOrigins: "",
 };
